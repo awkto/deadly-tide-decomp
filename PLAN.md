@@ -7,11 +7,19 @@ Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 | # | Step | State |
 |---|------|-------|
 | 1 | `.L96` container format | **done** — `docs/L96_FORMAT.md`, `tools/l96.py` |
-| 2 | Asset dump | in progress (bulk dump on a DO droplet); CD4 music ripped (9 tracks, 33 min) |
-| 3 | Decompile `DTPLAYER.EXE` | Ghidra export done; architecture in `docs/ENGINE_MAP.md`; gameplay data + scene graph being decoded |
+| 2 | Asset dump | **done** — all 29 files, 413 segments, ~92 min video; private copy in `dump/`; CD4 music as FLAC |
+| 3 | Decompile `DTPLAYER.EXE` | architecture (`docs/ENGINE_MAP.md`), scene graph (`docs/SCENE_GRAPH.md`), gameplay data (`docs/GAMEPLAY_DATA.md`) done; next: weapons/hit-scan/health/HUD logic, free-look renderer |
 | 4 | Original under Wine | **works** — see `tools/wine/README.md`; first reference recording taken |
-| 5 | C + SDL3 engine | started: `.L96` reader + own Cinepak decoder + A/V playback |
-| 6 | WASM build | not started |
+| 5 | C + SDL3 engine | plays whole levels: scene-graph chaining, enemy sprites + HUD over video; no input/shooting yet |
+| 6 | WASM build | works in Chrome with user-supplied files (MEMFS); todo lazy file access |
+
+## Next wave
+1. Gameplay: mouse/joystick crosshair, Weapon_HitScan against FG hit boxes, actor states/kills,
+   health + regen + death branch, HUD, SFX, save points/registry-equivalent saves.
+2. Free-look (type 6) software renderer: cube/texture view driven by mouse (globe hub, LEVEL01 seg 6...).
+3. Real branch conditions instead of the 'perfect player' stand-in; look-pick hotspots.
+4. Web: WORKERFS + OffscreenCanvas worker for lazy file reads; audio latency check.
+5. Reference: record real play in the Wine rig (needs scripted mission pick on the globe).
 
 ## What the game actually is
 

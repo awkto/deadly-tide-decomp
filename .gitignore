@@ -14,3 +14,5 @@ cd/
 iso/
 out/
 dumps/
+decomp/
+__pycache__/

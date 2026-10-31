@@ -1,53 +1,43 @@
 # Deadly Tide — decomp / port plan
 
-## What we have (findings so far, 2026-11-01)
+Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 
-- 4 CDs, extracted to `cd/cd1..cd4` (CD4 was a bin/cue; data track converted to ISO, tracks 2–10 are Red Book audio = music).
-- `DT.EXE` (2.6MB, 2.4MB of it resources) — launcher / menus / options UI. GDI only.
-- **`DTPLAYER.EXE` (160KB) — the actual game engine.** MSVC, built Aug 1996. DirectDraw + DirectSound,
-  VfW `ICOpen/ICSendMessage` for video, joystick + keyboard, registry for settings. Small enough to fully decompile.
-- `DTLAUNCH.DLL` — glue between the two (`QuietlyActivateDeadlyTideUI`).
-- Game data: `LOGOS.L96`, `INTRO*.L96`, `LEVEL00–15.L96`, `EPILOG.L96`, `CDn_NEXT.L96` (~1.9GB total).
+## Status (2026-11-01)
 
-### `.L96` container (partially mapped)
-- Header: magic `L96\0`, name, version 5, counts, offset table, `cvid` FourCC, list of linked level names.
-- `0x9c`: 0x18000-byte table (unknown — lookup/collision/path data?).
-- `0x1809c`: 256×RGB palette (768 bytes, Windows system colours in the ends).
-- `~0x183a0`: stream descriptor (320×200, rates).
-- Body: data in 0x6000 (24KB) blocks; each block holds one **Cinepak 320×200 frame** preceded by a
-  **68-byte per-frame header**, plus other interleaved data (audio and probably sprite/hit data).
-- LEVEL01 ≈ 4,360 frames ≈ 4.8 min at 15fps.
+| # | Step | State |
+|---|------|-------|
+| 1 | `.L96` container format | **done** — `docs/L96_FORMAT.md`, `tools/l96.py` |
+| 2 | Asset dump | in progress (bulk dump on a DO droplet); CD4 music ripped (9 tracks, 33 min) |
+| 3 | Decompile `DTPLAYER.EXE` | Ghidra export done; architecture in `docs/ENGINE_MAP.md`; gameplay data + scene graph being decoded |
+| 4 | Original under Wine | **works** — see `tools/wine/README.md`; first reference recording taken |
+| 5 | C + SDL3 engine | started: `.L96` reader + own Cinepak decoder + A/V playback |
+| 6 | WASM build | not started |
 
-### Video: solved at prototype level
-`tools/l96_cvid.py` scans for Cinepak frames, wraps them in an AVI, ffmpeg decodes them correctly as 24-bit
-(see `out/grid.png`, `out/l01grid.png`). ~4% of frames fail to decode — almost certainly frames split across
-a 24KB block boundary or false-positive matches; will go away once the container is parsed properly
-instead of pattern-scanned.
+## What the game actually is
 
-## The real work (not the video)
-The backgrounds are just a movie. The game is everything layered on top: enemies/sprites, aiming, hit
-detection, damage, the path branching between video segments, timing, HUD, sound. That logic lives in
-`DTPLAYER.EXE` and is driven by the per-frame headers and the side tables in the `.L96`. That's where
-most of the effort goes.
+- `DT.EXE` = launcher/options UI (pilot names, controls, graphics quality, difficulty). `DTPLAYER.EXE`
+  (160KB) = the engine; it ignores its command line, everything is passed through the registry.
+- The engine walks a **scene graph** of 100-byte segment records. Segment types:
+  0 plain video, 5 cutscene, **1 on-rails combat**, **2 360° panorama with path choice**, **6 real-time
+  free-look 3D** (e.g. LEVEL00's rotating globe mission select, textured with 128×128 Cinepak frames).
+  So it's mostly video, but not only video — there is a small real-time renderer too.
+- Video: Cinepak 320×200 at 15 fps (also 256×256 and 128×128 variants), played in a 320×240 mode.
+  Audio: 8-bit stereo 22050 Hz streamed alongside; SFX 8-bit mono 22050 Hz. Timing is clocked off the
+  audio play position.
+- Each video frame carries a 0x44-byte header with the **camera** (position, look-at, roll) and
+  aim/fire flags, so sprites can be placed in 3D over the pre-rendered video.
+- Enemies are streamed RLE sprites (`FG ` gameplay blocks, 0x58-byte records: bbox, 3D position,
+  "fires now"). No score; health 0–10000 regenerating by difficulty; death branches to a death scene.
+- Branching is seek-free: the start of each branch target is duplicated into "carry" sectors of the
+  groups before the branch point.
+- CD4 audio tracks: neither EXE uses CD audio, so they may be a bonus soundtrack.
 
-## Approach (recommended)
-**Decompile for understanding, then reimplement cleanly** — not a byte-matching decomp. Matching MSVC 4.x
-output gives little for a 160KB binary and costs a lot. Plan:
+## Approach
+Decompile for understanding, then reimplement cleanly (C11 + SDL3, own Cinepak decoder), not byte-matching.
+WASM via Emscripten: stream per-level `.L96` from user-supplied files (never host game data); the
+group/index layout suits HTTP range requests. The free-look 3D scenes need a small software renderer
+(original is software too, so this stays portable).
 
-1. **Container + assets** — full `.L96` parser (Python first): block layout, per-frame header fields,
-   audio format, sprites/overlays, the 0x18000 table. Dump everything to open formats.
-2. **Static RE of `DTPLAYER.EXE`** in Ghidra (needs installing): label the file reader, the frame-header
-   consumer, the enemy/sprite system, input, scoring. Cross-reference with dumped data.
-3. **Dynamic check** — run the original under Wine (or 86Box/Win95 VM if Wine fails on DirectDraw 8-bit)
-   to record reference behaviour/screens for comparison.
-4. **Reimplementation** in C (or C++) + **SDL3**: own Cinepak decoder (~500 lines), DirectSound → SDL audio,
-   DirectDraw → software 320×200 surface scaled up. CD audio tracks → OGG/FLAC files.
-5. **WASM build** via Emscripten. Problem: ~1.9GB data. Plan is to stream per-level `.L96` via HTTP
-   range requests (the 24KB block layout suits this) and have the user supply their own ISOs/files —
-   don't host the game data.
-
-## Open questions
-- What the 68-byte frame header and the 0x18000 table contain (likely the key to gameplay).
-- Audio stream format inside blocks.
-- Whether the game runs 8-bit palettized (palette in file suggests yes; sprites likely 8-bit).
-- Does it run under Wine at all, for reference recordings?
+## Infrastructure
+- Heavy work (bulk dump, Ghidra, Wine, builds) runs on a DigitalOcean droplet (`claude-test` tag),
+  not on pro. Raw decompiled C (`decomp/`), game data and dumps stay private and out of git.

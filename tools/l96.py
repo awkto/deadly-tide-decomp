@@ -5,6 +5,8 @@ Full format description: docs/L96_FORMAT.md.
 
     python3 tools/l96.py info  FILE      header, sections, segment/stream summary
     python3 tools/l96.py check FILE      walk every group, report inconsistencies (exit 1 if any)
+    python3 tools/l96.py graph FILE [OUT.dot]   decoded segment table, hotspots, graph checks;
+                                         optionally write a Graphviz scene graph (docs/SCENE_GRAPH.md)
 
 Library use:
     f = L96(path)
@@ -392,7 +394,237 @@ def cmd_check(path):
     return 1 if P else 0
 
 
+# ---- scene graph (segment records, hotspot table) ------------------------------
+# Field meanings and evidence: docs/SCENE_GRAPH.md.  All functions in this section are
+# self-contained readers over f.segments[...]['raw'] and the table44 bytes.
+
+SEG_TYPE_NAMES = {0: 'video', 1: 'rail', 2: 'pano', 5: 'cutscene', 6: 'freelook'}
+
+# (offset, struct format, name, meaning)
+SEG_FIELDS = [
+    (0x00, '<i', 'type',       '0 video, 1 rail combat, 2 panorama, 5 cutscene, 6 free-look'),
+    (0x04, '<i', 'flag',       '2 stored normally, 1 head prefetched in carry sectors'),
+    (0x08, '<I', 'offset',     'file offset of the stream data'),
+    (0x0c, '<h', 'first',      'first stream index entry'),
+    (0x0e, '<b', 'next',       'default next segment; <0: level exit to names[-1-next]'),
+    (0x0f, '<B', 'count',      'number of stream index entries (groups of 5 frames)'),
+    (0x12, '<B', 'weapon',     'player gun type 0..5 (Weapon_Fire 0x416460)'),
+    (0x16, '<B', 'hs_first',   'first table44 hotspot record'),
+    (0x17, '<B', 'hs_count',   'number of hotspot records (0 = no choices)'),
+    (0x18, '<h', 'pano_yaw',   'entry yaw / yaw offset of the pano or free-look segment that follows'),
+    (0x1a, '<h', 'pano_pitch', 'entry pitch of the following pano / free-look segment'),
+    (0x1c, '<h', 'exit_yaw',   'yaw the previous pano/free-look camera turns to before cutting here'),
+    (0x1e, '<h', 'exit_pitch', 'pitch, same use'),
+    (0x21, '<B', 'look_mode',  'type 6 control sub-mode 1..4'),
+    (0x22, '<b', 'esc_target', 'ESC skip target segment (-1: leave level to hub)'),
+    (0x23, '<b', 'death',      'segment to branch to when health reaches 0'),
+    (0x2c, '<I', 'pano_limits','type 2: nonzero = use yaw/pitch limits from the pano header'),
+    (0x3c, '<i', 'view_w',     'view width (320; 0x200 for free-look)'),
+    (0x40, '<i', 'view_h',     'view height (200; 0x200 for free-look)'),
+    (0x44, '<B', 'aim',        'crosshair / aiming enabled'),
+    (0x45, '<B', 'xhair',      'crosshair style (0 = none)'),
+    (0x46, '<h', 'pano_roll',  'entry roll of the following free-look segment'),
+    (0x4a, '<h', 'half_fov',   'half field of view, 1/512 degree units (0x3c00 = 30 deg)'),
+    (0x4c, '<B', 'sfx_hp50',   'sound when health drops below 50 (0xff none)'),
+    (0x4d, '<B', 'sfx_hp20',   'sound when health drops below 20'),
+    (0x4e, '<B', 'sfx_hp80',   'sound when health climbs back above 80'),
+    (0x4f, '<B', 'sfx_overheat','sound when the gun overheats'),
+    (0x50, '<B', 'sfx_cooled', 'sound when the gun is usable again'),
+    (0x51, '<3B', 'regen',     'health regained per frame on easy/normal/hard (of 10000)'),
+    (0x54, '<B', 'save',       'save point: entering stores SavePoint=this segment'),
+    (0x55, '<B', 'reset',      'checkpoint: reset health/ammo/actors; SavePoint restore hook'),
+    (0x56, '<b', 'gun_param',  'weapon parameter passed to the gun routine'),
+    (0x58, '<B', 'gauge',      'HUD gauge layout (1 = first variant)'),
+    (0x59, '<B', 'gun_sprite', 'gun / crosshair sprite set index'),
+    (0x5b, '<B', 'choice_xhair','crosshair style while choices are open'),
+    (0x5c, '<h', 'choice_from','scene frame from which hotspots can be picked (0 = always)'),
+]
+
+HS_REC = 0x44
+HS_FLAGS = [(0x1, 'aim'), (0x2, 'hp>'), (0x4, 'hp<'), (0x8, 'kills>'), (0x10, 'kills<'),
+            (0x20, 'any-alive'), (0x40, 'none-alive'), (0x80, 'look'), (0x100, 'first+other-alive'),
+            (0x200, 'random'), (0x80000000, 'OR')]
+
+
+def decode_segment(raw):
+    """100-byte segment record -> dict of named fields (see SEG_FIELDS)."""
+    out = {}
+    for off, fmt, name, _ in SEG_FIELDS:
+        v = struct.unpack_from(fmt, raw, off)
+        out[name] = v if len(v) > 1 else v[0]
+    return out
+
+
+def decode_hotspot(raw):
+    """0x44-byte table44 record (branch / hotspot)."""
+    target, flags, hp, kills = struct.unpack_from('<iIii', raw, 0)
+    a = struct.unpack_from('<6h', raw, 0x10)
+    x0, y0, x1, y1 = struct.unpack_from('<4h', raw, 0x1c)
+    b = struct.unpack_from('<6h', raw, 0x24)
+    return dict(target=target, flags=flags, hp=hp, kills=kills,
+                actors=[x for x in a + b if x != -1], rect=(x0, y0, x1, y1),
+                chance=raw[0x30], raw=bytes(raw))
+
+
+def hotspot_label(h):
+    fl = h['flags']
+    if fl == 0x200:
+        return 'random %d%%' % h['chance']
+    if fl == 0x80:
+        x0, y0, x1, y1 = h['rect']
+        return 'look yaw %d..%d pitch %d..%d' % (x0, x1, y0, y1)
+    parts = []
+    for bit, name in HS_FLAGS:
+        if fl & bit and bit not in (0x80000000,):
+            if bit in (0x2, 0x4): name += str(h['hp'])
+            elif bit in (0x8, 0x10): name += str(h['kills'])
+            elif bit in (0x20, 0x40, 0x100): name += '%s' % h['actors']
+            elif bit == 0x1: name += ' x%d..%d y%d..%d' % (h['rect'][0], h['rect'][2], h['rect'][1], h['rect'][3])
+            parts.append(name)
+    s = (' OR ' if fl & 0x80000000 else ' & ').join(parts) or 'always'
+    return s
+
+
+def hotspots(f):
+    h = f.header
+    return [decode_hotspot(f.d[h['off_tbl44'] + HS_REC * i:h['off_tbl44'] + HS_REC * (i + 1)])
+            for i in range(h['n_tbl44'])]
+
+
+def kill_triggers(f):
+    """table54 (actor class) records whose +0x34 (branch when killed) is set: [(class, target)]."""
+    h = f.header; out = []
+    for i in range(h['n_tbl54']):
+        v = struct.unpack_from('<b', f.d, h['off_tbl54'] + 0x54 * i + 0x34)[0]
+        if v != -1:
+            out.append((i, v))
+    return out
+
+
+def scene_edges(f):
+    """[(src, dst, kind, label)].  dst >= 0 segment, dst < 0 level exit (names[-1-dst]).
+    kinds: next, hotspot, death, esc, kill (src = None)."""
+    hs = hotspots(f); n = len(f.segments); E = []
+    for i, sg in enumerate(f.segments):
+        d = decode_segment(sg['raw'])
+        E.append((i, d['next'], 'next', ''))
+        for k in range(d['hs_count']):
+            j = d['hs_first'] + k
+            if j < len(hs):
+                E.append((i, hs[j]['target'], 'hotspot', 'h%d %s' % (j, hotspot_label(hs[j]))))
+            else:
+                E.append((i, None, 'hotspot', 'h%d out of range' % j))
+        # only where damage can happen; a request of 0 means "none" to the engine (g_branchReq)
+        if (d['type'] in (1, 2, 6) or d['aim']) and d['death'] not in (i, 0):
+            E.append((i, d['death'], 'death', 'death'))
+        if d['esc_target'] >= 0 and d['esc_target'] != i and (i < d['esc_target'] or d['next'] == 0):
+            E.append((i, d['esc_target'], 'esc', 'ESC'))
+    for c, t in kill_triggers(f):
+        E.append((None, t, 'kill', 'class %d killed' % c))
+    return E
+
+
+def graph_checks(f, E):
+    """Sanity checks over the graph; returns list of strings."""
+    n = len(f.segments); out = []
+    for s, t, kind, lab in E:
+        if t is None or (t >= 0 and t >= n) or (t < 0 and -1 - t >= len(f.names)):
+            out.append('PROBLEM: %s edge %s -> %s (%s) does not land on a segment or name' % (kind, s, t, lab))
+    # reachability from segment 0 over next / hotspot / kill edges (death and ESC excluded)
+    adj = collections.defaultdict(set)
+    for s, t, kind, _ in E:
+        if kind in ('next', 'hotspot') and t is not None and 0 <= t < n:
+            adj[s].add(t)
+    kill_t = {t for s, t, k, _ in E if k == 'kill' and t is not None and t >= 0}
+    seen = {0}; todo = [0]
+    while todo:
+        x = todo.pop()
+        for y in adj[x] | (kill_t if f.segments[x]['type'] == 1 else set()):
+            if y not in seen: seen.add(y); todo.append(y)
+    death_t = {t for s, t, k, _ in E if k == 'death' and t is not None and t >= 0}
+    rest = sorted(set(range(n)) - seen)
+    out.append('reachable from segment 0 (next/hotspot/kill): %d of %d; not reached: %s'
+               % (len(seen), n, rest or '-'))
+    if rest:
+        out.append('  of those, death targets: %s' % sorted(set(rest) & death_t))
+    exits = sorted({t for s, t, k, _ in E if t is not None and t < 0 and s in seen})
+    out.append('level exits reached: %s' % ', '.join(f.names[-1 - t] for t in exits) if exits else 'no exit reached')
+    for t in sorted(death_t):
+        if 0 <= t < n:
+            out.append('death target %d: type %d, %d groups (%.1f s), next %d'
+                       % (t, f.segments[t]['type'], f.segments[t]['count'], f.segments[t]['count'] / 3,
+                          f.segments[t]['next']))
+    return out
+
+
+def scene_dot(f, E, title=None):
+    """Graphviz text for the scene graph."""
+    title = title or f.header['name']
+    L = ['digraph "%s" {' % title, '  rankdir=LR; node [fontname="Helvetica",fontsize=10];',
+         '  edge [fontname="Helvetica",fontsize=8];', '  labelloc=t; label="%s scene graph";' % title]
+    colors = {0: '#dddddd', 1: '#f4b183', 2: '#9dc3e6', 5: '#e2f0d9', 6: '#a9d18e'}
+    for i, sg in enumerate(f.segments):
+        d = decode_segment(sg['raw'])
+        extra = ''.join([' SAVE' if d['save'] else '', ' RESET' if d['reset'] else ''])
+        lab = '%d %s\\n%d groups, %.0f s%s' % (i, SEG_TYPE_NAMES.get(d['type'], d['type']),
+                                              d['count'], d['count'] / 3, extra)
+        shape = 'doubleoctagon' if d['type'] == 6 else ('box' if d['type'] != 1 else 'box3d')
+        per = 3 if d['reset'] else (2 if d['save'] else 1)
+        L.append('  s%d [label="%s",shape=%s,style=filled,fillcolor="%s",peripheries=%d];'
+                 % (i, lab, shape, colors.get(d['type'], 'white'), per))
+    for t in sorted({t for _, t, _, _ in E if t is not None and t < 0}):
+        nm = f.names[-1 - t] if -1 - t < len(f.names) else '?'
+        L.append('  x%d [label="%s",shape=note,style=filled,fillcolor="%s"];'
+                 % (-t, nm + ('' if nm in ('SUCCESS',) else '.L96'), '#ffe699'))
+    if any(k == 'kill' for _, _, k, _ in E):
+        L.append('  kill [label="actor killed",shape=plaintext,fontcolor="#c55a11"];')
+    style = {'next': 'color=black', 'hotspot': 'color="#2e75b6",fontcolor="#2e75b6",penwidth=1.5',
+             'death': 'color="#c00000",style=dashed,fontcolor="#c00000",constraint=false',
+             'esc': 'color=gray,style=dotted,fontcolor=gray,constraint=false',
+             'kill': 'color="#c55a11",style=bold,fontcolor="#c55a11"'}
+    for s, t, kind, lab in E:
+        if t is None: continue
+        a = 'kill' if s is None else 's%d' % s
+        b = 's%d' % t if t >= 0 else 'x%d' % -t
+        lab = lab.replace('"', "'")
+        L.append('  %s -> %s [%s%s];' % (a, b, style[kind], ',label="%s"' % lab if lab and kind != 'death' else ''))
+    L.append('}')
+    return '\n'.join(L) + '\n'
+
+
+def cmd_graph(path, dot_path=None):
+    f = L96(path); E = scene_edges(f)
+    print('%s  linked names: %s' % (path, ' '.join('%d:%s' % (-1 - i, n) for i, n in enumerate(f.names)) or '-'))
+    print(' seg type     flag count  sec  next hs   esc death  save reset aim xh wpn fov   choice  entry(y,p,r)  exit(y,p)  regen')
+    for i, sg in enumerate(f.segments):
+        d = decode_segment(sg['raw'])
+        hs = '%d+%d' % (d['hs_first'], d['hs_count']) if d['hs_count'] else '-'
+        print(' %3d %-8s %4d %5d %4.0f %5d %-4s %4d %5d %5s %5s %3d %2d %3d %4.1f %4s  %13s %10s  %s'
+              % (i, SEG_TYPE_NAMES.get(d['type'], d['type']), d['flag'], d['count'], d['count'] / 3, d['next'], hs,
+                 d['esc_target'], d['death'], 'Y' if d['save'] else '', 'Y' if d['reset'] else '',
+                 d['aim'], d['xhair'], d['weapon'], d['half_fov'] / 512.0, d['choice_from'] or '',
+                 '%d,%d,%d' % (d['pano_yaw'], d['pano_pitch'], d['pano_roll']),
+                 '%d,%d' % (d['exit_yaw'], d['exit_pitch']), '/'.join(map(str, d['regen']))))
+    hs = hotspots(f)
+    if hs:
+        print(' hotspots (table44):')
+        for j, h in enumerate(hs):
+            print('  h%-2d -> %3d  flags 0x%03x  %s' % (j, h['target'], h['flags'], hotspot_label(h)))
+    kt = kill_triggers(f)
+    if kt:
+        print(' kill-triggered branches (table54 +0x34):', ', '.join('class %d -> %d' % x for x in kt))
+    for line in graph_checks(f, E):
+        print(' ' + line)
+    if dot_path:
+        with open(dot_path, 'w') as o:
+            o.write(scene_dot(f, E))
+        print(' wrote', dot_path)
+    return 0
+
+
 if __name__ == '__main__':
+    if len(sys.argv) >= 3 and sys.argv[1] == 'graph':
+        sys.exit(cmd_graph(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None))
     if len(sys.argv) != 3 or sys.argv[1] not in ('info', 'check'):
         print(__doc__); sys.exit(2)
     sys.exit(cmd_info(sys.argv[2]) if sys.argv[1] == 'info' else cmd_check(sys.argv[2]))

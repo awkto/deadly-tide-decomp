@@ -8,12 +8,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# SDL3 is the only dependency, built from source and linked statically so the
-# same recipe works natively and (later) under Emscripten, which ships its own
-# SDL3 port -- skip the fetch there.
+# SDL3 is the only dependency, built from source and linked statically.
+# Emscripten ships its own SDL3 port (--use-port=sdl3) -- skip the fetch there.
 if(EMSCRIPTEN)
-  set(DT_SDL_TARGET SDL3::SDL3)
-  find_package(SDL3 REQUIRED)
+  set(DT_SDL_TARGET "")
+  add_compile_options(--use-port=sdl3)
+  add_link_options(--use-port=sdl3)
 else()
   include(FetchContent)
   set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -44,3 +44,16 @@ else()
 endif()
 target_compile_options(dtcore PRIVATE ${DT_WARN})
 target_compile_options(deadlytide PRIVATE ${DT_WARN})
+
+if(EMSCRIPTEN)
+  # Browser build: deadlytide.js + deadlytide.wasm, driven by web/index.html. The user's own
+  # .L96 files are written into MEMFS by the page; JS calls dt_start() from the Play click.
+  set_target_properties(deadlytide PROPERTIES SUFFIX ".js")
+  target_link_options(deadlytide PRIVATE
+    -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=2GB
+    "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_malloc,_free"
+    "-sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8"
+    -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -O2)
+  add_custom_command(TARGET deadlytide POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web $<TARGET_FILE_DIR:deadlytide>)
+endif()

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Deadly Tide (1996) - web player</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ body{background:#111;color:#ccc;font:14px system-ui,sans-serif;margin:0;padding:16px;text-align:center}
+ #drop{border:2px dashed #666;padding:16px;margin:0 auto 12px;max-width:640px}
+ #drop.over{border-color:#6cf}
+ canvas{display:block;margin:12px auto;width:640px;max-width:100%;aspect-ratio:8/5;background:#000;image-rendering:pixelated;image-rendering:crisp-edges}
+ #log{font:12px monospace;color:#999;white-space:pre-wrap;max-width:640px;margin:0 auto;text-align:left}
+</style></head><body>
+<h2>Deadly Tide (1996) - web player</h2>
+<p>Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96). Nothing is uploaded; files stay in your browser.</p>
+<div id="drop">
+ <input id="files" type="file" multiple accept=".l96,.L96"> or drop files here<br><br>
+ File: <select id="file"></select>
+ Segment: <select id="seg"></select>
+ <button id="play" disabled>Play</button>
+</div>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<div id="log"></div>
+<script>
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; };
+const MAX_MEMFS = 250 * 1024 * 1024;
+let runtimeReady = false, playing = false;
+const loaded = {};   // name -> true (written to MEMFS)
+
+var Module = {
+  canvas: $('canvas'),
+  print: t => log(t),
+  printErr: t => { console.warn(t); log('[err] ' + t); },
+  onRuntimeInitialized() { runtimeReady = true; log('engine ready'); },
+  onPlayerDone(rc) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('segment finished, rc=' + rc); },
+};
+
+async function addFiles(list) {
+  if (!runtimeReady) { log('engine still loading, try again'); return; }
+  for (const f of list) {
+    const name = f.name.toUpperCase();
+    if (!name.endsWith('.L96')) { log('skipping ' + f.name); continue; }
+    if (f.size > MAX_MEMFS) { log(f.name + ' is ' + (f.size>>20) + ' MB: too large for the in-memory build'); continue; }
+    // TODO: lazy reads (WORKERFS in a worker) so large files need no RAM copy.
+    const buf = new Uint8Array(await f.arrayBuffer());
+    const FS = Module.FS;
+    try { FS.unlink('/' + name); } catch (e) {}
+    FS.writeFile('/' + name, buf);
+    if (!loaded[name]) { loaded[name] = true; const o = document.createElement('option'); o.value = o.textContent = name; $('file').appendChild(o); }
+    log('loaded ' + name + ' (' + (f.size >> 10) + ' KB)');
+  }
+  if (Object.keys(loaded).length) { $('play').disabled = false; await refreshSegs(); }
+}
+async function refreshSegs() {
+  if (!runtimeReady) return;
+  const n = Module.ccall('dt_segment_count', 'number', ['string'], ['/' + $('file').value]);
+  $('seg').innerHTML = '';
+  for (let i = 0; i < Math.max(n, 0); i++) { const o = document.createElement('option'); o.value = o.textContent = i; $('seg').appendChild(o); }
+  if (n < 0) log('not a valid L96 file');
+}
+$('files').onchange = e => addFiles(e.target.files);
+$('file').onchange = refreshSegs;
+const drop = $('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+$('play').onclick = () => {   // user gesture: lets the browser start audio
+  if (playing || !runtimeReady) return;
+  const rc = Module.ccall('dt_start', 'number', ['string', 'number', 'number'], ['/' + $('file').value, +$('seg').value, 2]);
+  if (rc === 0) { playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; }
+  else log('dt_start failed: ' + rc);
+};
+</script>
+<script src="deadlytide.js"></script>
+</body></html>

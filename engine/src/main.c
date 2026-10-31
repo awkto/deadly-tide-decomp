@@ -35,6 +35,8 @@ typedef struct {
     CinepakDecoder dec;
     int dec_ready;
     int have_audio;
+    int drain_ticks;           /* ticks spent waiting for the audio tail */
+    int rc;                    /* result, set by play_tick */
 } Player;
 
 /* Decode the next frame of the segment into p->dec.pixels. Returns 1 if a frame was
@@ -88,49 +90,66 @@ static int fill_audio(Player *p, int windowed)
     return 0;
 }
 
+/* One iteration of the player. Returns 0 to keep going, 1 when finished (p->rc = status). */
+static int play_tick(Player *p)
+{
+    int count = p->f->segments[p->seg].count;
+    if (plat_quit_requested()) return 1;
+    if (fill_audio(p, 1) != 0) { p->rc = 1; return 1; }
+
+    /* Audio clock: bytes the device has consumed, in milliseconds. */
+    uint64_t played = p->audio_put - plat_audio_queued();
+    uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
+
+    if (p->max_frames && p->frame_no >= p->max_frames) return 1;   /* --count: stop right there */
+    if (p->vg >= count) {
+        /* Segment over: flush and let the tail of the audio drain (bounded, in case a
+         * device stops consuming). */
+        plat_audio_flush();
+        if (plat_audio_queued() == 0 || ++p->drain_ticks > 300) return 1;
+        return 0;
+    }
+    /* Decode every frame that is due (late ones are decoded, only the newest shown). */
+    int shown = 0, px = 0;
+    while ((uint64_t)p->frame_no * 1000 / L96_VIDEO_FPS <= clock_ms && p->vg < count &&
+           !(p->max_frames && p->frame_no >= p->max_frames)) {
+        int r = next_frame(p, &px);
+        if (r <= 0) { p->rc = r < 0; break; }
+        if (px) shown = 1;
+        if (fill_audio(p, 1) != 0) { p->rc = 1; break; }
+    }
+    if (shown) plat_present(p->dec.pixels, p->dec.width, p->dec.height);
+    return p->rc != 0;
+}
+
+static int play_init(Player *p, const L96File *f, int seg, int scale, int max_frames)
+{
+    memset(p, 0, sizeof *p);
+    p->f = f; p->seg = seg; p->max_frames = max_frames;
+    return plat_init(320, 200, scale, L96_AUDIO_RATE, "Deadly Tide");
+}
+
+static int play_finish(Player *p)
+{
+    for (int i = 0; i < RING; i++) l96_group_free(&p->ring[i]);
+    if (p->dec_ready) cinepak_free(&p->dec);
+    plat_shutdown();
+    return p->rc;
+}
+
+#ifndef __EMSCRIPTEN__
 static int play(const L96File *f, int seg, int scale, int max_frames)
 {
     Player p;
-    memset(&p, 0, sizeof p);
-    p.f = f; p.seg = seg; p.max_frames = max_frames;
-    if (plat_init(320, 200, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) return 1;
-
-    int count = f->segments[seg].count, rc = 0, drain_ticks = 0;
-    for (;;) {
-        if (plat_quit_requested()) break;
-        if (fill_audio(&p, 1) != 0) { rc = 1; break; }
-
-        /* Audio clock: bytes the device has consumed, in milliseconds. */
-        uint64_t played = p.audio_put - plat_audio_queued();
-        uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
-
-        if (max_frames && p.frame_no >= max_frames) break;   /* --count: stop right there */
-        if (p.vg >= count) {
-            /* Segment over: flush and let the tail of the audio drain (bounded, in case a
-             * device stops consuming). */
-            plat_audio_flush();
-            if (plat_audio_queued() == 0 || ++drain_ticks > 300) break;
-            plat_delay_ms(10);
-            continue;
-        }
-        /* Decode every frame that is due (late ones are decoded, only the newest shown). */
-        int shown = 0, px = 0;
-        while ((uint64_t)p.frame_no * 1000 / L96_VIDEO_FPS <= clock_ms && p.vg < count &&
-               !(max_frames && p.frame_no >= max_frames)) {
-            int r = next_frame(&p, &px);
-            if (r <= 0) { rc = r < 0; break; }
-            if (px) shown = 1;
-            if (fill_audio(&p, 1) != 0) { rc = 1; break; }
-        }
-        if (shown) plat_present(p.dec.pixels, p.dec.width, p.dec.height);
-        if (rc) break;
-        plat_delay_ms(2);
-    }
-    for (int i = 0; i < RING; i++) l96_group_free(&p.ring[i]);
-    if (p.dec_ready) cinepak_free(&p.dec);
-    plat_shutdown();
-    return rc;
+    if (play_init(&p, f, seg, scale, max_frames) != 0) return 1;
+    while (!play_tick(&p)) plat_delay_ms(2);
+    return play_finish(&p);
 }
+#endif
+
+#ifdef __EMSCRIPTEN__
+#include "web_entry.inc"   /* browser entry points replace the CLI below */
+#else
 
 /* ---- Headless frame dump ---------------------------------------------- */
 
@@ -221,3 +240,4 @@ int main(int argc, char **argv)
     l96_close(&f);
     return rc;
 }
+#endif

@@ -17,3 +17,4 @@ dumps/
 decomp/
 __pycache__/
 dump/
+build/

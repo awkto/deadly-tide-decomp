@@ -1,0 +1,16 @@
+# Copyrighted game data — never commit
+*.zip
+*.iso
+*.img
+*.cue
+*.bin
+*.L96
+*.l96
+*.EXE
+*.exe
+*.DLL
+*.dll
+cd/
+iso/
+out/
+dumps/

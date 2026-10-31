@@ -37,61 +37,85 @@ static void sink_audio(void *ud, const uint8_t *pcm, size_t n)
     a->audio_put += n;
 }
 
+typedef struct {
+    Chain *c;
+    AudioSink sink;
+    long frame_no, max_frames;
+    int pace, rc, drain_ticks, ended;
+} Player;
+
+static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames, int pace)
+{
+    memset(p, 0, sizeof *p);
+    p->c = chain_open(co);
+    if (!p->c) return 1;
+    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
+        chain_close(p->c); p->c = NULL; return 1;
+    }
+    p->sink.pace = pace;
+    p->pace = pace;
+    p->max_frames = max_frames;
+    return 0;
+}
+
+/* One iteration of the player. Returns nonzero when playback is over. */
+static int play_tick(Player *p)
+{
+    Chain *c = p->c;
+    if (plat_quit_requested()) return 1;
+    if (plat_skip_requested()) {
+        int r = chain_skip(c);
+        if (r == 2) return 1;
+        if (r == 1 && p->pace) {
+            /* Rebase so the audio clock stays continuous after dropping the queue. */
+            p->sink.audio_put -= plat_audio_queued();
+            plat_audio_clear();
+        }
+    }
+    if (!p->ended && chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; return 1; }
+    if (p->max_frames && p->frame_no >= p->max_frames) return 1;   /* --count: stop right there */
+
+    if (p->ended) {
+        /* Chain over: flush and let the tail of the audio drain (bounded). */
+        if (!p->pace) return 1;
+        plat_audio_flush();
+        return plat_audio_queued() == 0 || ++p->drain_ticks > 300;
+    }
+    /* Audio clock: bytes the device has consumed, in milliseconds. */
+    uint64_t played = p->sink.audio_put - plat_audio_queued();
+    uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
+
+    /* Decode every tick that is due (late ones are decoded, only the newest shown). */
+    int shown = 0;
+    while ((!p->pace || (uint64_t)p->frame_no * 1000 / L96_VIDEO_FPS <= clock_ms) &&
+           !(p->max_frames && p->frame_no >= p->max_frames)) {
+        int img = 0, r = chain_step(c, &img, sink_audio, &p->sink);
+        if (r < 0) { p->rc = 1; break; }
+        if (r == 0) { p->ended = 1; break; }
+        p->frame_no++;
+        if (img) shown = 1;
+        if (!p->pace) break;
+        if (chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; break; }
+    }
+    if (shown) plat_present(chain_frame(c), CHAIN_W, CHAIN_H);
+    return p->rc != 0;
+}
+
+static int play_finish(Player *p)
+{
+    fprintf(stderr, "sequence: %s\n", chain_history(p->c));
+    chain_close(p->c);
+    plat_shutdown();
+    return p->rc;
+}
+
+#ifndef __EMSCRIPTEN__
 static int play(const ChainOpts *co, int scale, long max_frames, int pace)
 {
-    Chain *c = chain_open(co);
-    if (!c) return 1;
-    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) { chain_close(c); return 1; }
-
-    AudioSink sink = { 0, pace };
-    long frame_no = 0;
-    int rc = 0, drain_ticks = 0, ended = 0;
-    for (;;) {
-        if (plat_quit_requested()) break;
-        if (plat_skip_requested()) {
-            int r = chain_skip(c);
-            if (r == 2) break;
-            if (r == 1 && pace) {
-                /* Rebase so the audio clock stays continuous after dropping the queue. */
-                sink.audio_put -= plat_audio_queued();
-                plat_audio_clear();
-            }
-        }
-        if (!ended && chain_fill(c, AHEAD, sink_audio, &sink) != 0) { rc = 1; break; }
-        if (max_frames && frame_no >= max_frames) break;   /* --count: stop right there */
-
-        if (ended) {
-            /* Chain over: flush and let the tail of the audio drain (bounded). */
-            if (!pace) break;
-            plat_audio_flush();
-            if (plat_audio_queued() == 0 || ++drain_ticks > 300) break;
-            plat_delay_ms(10);
-            continue;
-        }
-        /* Audio clock: bytes the device has consumed, in milliseconds. */
-        uint64_t played = sink.audio_put - plat_audio_queued();
-        uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
-
-        /* Decode every tick that is due (late ones are decoded, only the newest shown). */
-        int shown = 0;
-        while ((!pace || (uint64_t)frame_no * 1000 / L96_VIDEO_FPS <= clock_ms) &&
-               !(max_frames && frame_no >= max_frames)) {
-            int img = 0, r = chain_step(c, &img, sink_audio, &sink);
-            if (r < 0) { rc = 1; break; }
-            if (r == 0) { ended = 1; break; }
-            frame_no++;
-            if (img) shown = 1;
-            if (!pace) break;
-            if (chain_fill(c, AHEAD, sink_audio, &sink) != 0) { rc = 1; break; }
-        }
-        if (shown) plat_present(chain_frame(c), CHAIN_W, CHAIN_H);
-        if (rc) break;
-        plat_delay_ms(pace ? 2 : 1);
-    }
-    fprintf(stderr, "sequence: %s\n", chain_history(c));
-    chain_close(c);
-    plat_shutdown();
-    return rc;
+    Player p;
+    if (play_init(&p, co, scale, max_frames, pace) != 0) return 1;
+    while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
+    return play_finish(&p);
 }
 
 /* ---- Headless frame dump ---------------------------------------------- */
@@ -204,3 +228,8 @@ int main(int argc, char **argv)
     if (dump || headless) return run_headless(&co, dump, count, every);
     return play(&co, scale, count, pace);
 }
+#endif /* !__EMSCRIPTEN__ */
+
+#ifdef __EMSCRIPTEN__
+#include "web_entry.inc"
+#endif

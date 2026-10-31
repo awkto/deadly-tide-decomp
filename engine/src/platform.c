@@ -9,6 +9,7 @@ static SDL_Renderer    *g_ren;
 static SDL_Texture     *g_tex;
 static int              g_tex_w, g_tex_h;
 static SDL_AudioStream *g_audio;
+static int              g_skip;
 
 int plat_init(int w, int h, int scale, int audio_rate, const char *title)
 {
@@ -65,7 +66,8 @@ int plat_quit_requested(void)
     int quit = 0;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_EVENT_QUIT) quit = 1;
-        if (ev.type == SDL_EVENT_KEY_DOWN && (ev.key.key == SDLK_ESCAPE || ev.key.key == SDLK_Q)) quit = 1;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q) quit = 1;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE && !ev.key.repeat) g_skip = 1;
     }
     return quit;
 }
@@ -81,6 +83,15 @@ size_t plat_audio_queued(void)
     return q < 0 ? 0 : (size_t)q;
 }
 
+int plat_skip_requested(void)
+{
+    int s = g_skip;
+    g_skip = 0;
+    return s;
+}
+
 void plat_audio_flush(void) { SDL_FlushAudioStream(g_audio); }
+
+void plat_audio_clear(void) { SDL_ClearAudioStream(g_audio); }
 
 void plat_delay_ms(uint32_t ms) { SDL_Delay(ms); }

@@ -30,7 +30,7 @@ else()
 endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
-add_library(dtcore STATIC src/l96.c src/cinepak.c)
+add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c)
 target_include_directories(dtcore PUBLIC src)
 
 # Platform layer (all SDL calls live in platform.c) + front end.

@@ -26,6 +26,14 @@ size_t plat_audio_queued(void) { return 0; }
 void plat_audio_flush(void) {}
 void plat_audio_clear(void) {}
 
+int  plat_mouse(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
+int  plat_joystick(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
+int  plat_act_requested(void) { return 0; }
+void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan)
+{
+    (void)pcm_u8_mono; (void)n; (void)vol; (void)pan;
+}
+
 void plat_delay_ms(uint32_t ms)
 {
     struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };

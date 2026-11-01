@@ -27,6 +27,18 @@ size_t plat_audio_queued(void);
 void   plat_audio_flush(void);   /* no more audio coming: let the device play out the tail */
 void   plat_audio_clear(void);   /* drop everything queued (branch / skip) */
 
+/* Input. Mouse position in frame coordinates (0..w-1 x 0..h-1 of the last presented frame,
+ * clamped); buttons bit 0 left, bit 1 right, bit 2 middle. Returns 0 when there is no pointer. */
+int  plat_mouse(int *x, int *y, uint32_t *buttons);
+/* First joystick, if any: axes -32768..32767, buttons bits 0..2 = buttons 1..3. 0 = none. */
+int  plat_joystick(int *x, int *y, uint32_t *buttons);
+/* Nonzero once per Space press seen by plat_quit_requested() (the ACT key). */
+int  plat_act_requested(void);
+
+/* Sound effects: u8 mono PCM at the audio rate, mixed over the streamed audio.
+ * vol 0..256 (256 = full), pan -256 (left) .. 256 (right). The PCM is copied. */
+void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan);
+
 void plat_delay_ms(uint32_t ms);
 
 #endif

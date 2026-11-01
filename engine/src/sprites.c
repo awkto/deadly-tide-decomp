@@ -92,7 +92,7 @@ static uint8_t xrgb_to_index(const SpriteCtx *c, uint32_t v)
     return c->lut555[r << 10 | g << 5 | b];
 }
 
-void sprite_draw(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h)
+static void draw_rle(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h, int flip, int top)
 {
     if (!r->pixels || r->w <= 0 || r->h <= 0) return;
 
@@ -115,7 +115,7 @@ void sprite_draw(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, in
             int n = -op;
             if (s + 1 + n > end) n = (int)(end - s - 1);
             /* Row 0 is the bottom row of the sprite and y counts up from the bottom of the screen. */
-            int sy = h - 1 - (r->y + row);
+            int sy = flip ? top + row : h - 1 - (r->y + row);
             if (row < r->h && sy >= 0 && sy < h) {
                 uint32_t *line = dst + (size_t)sy * (size_t)w;
                 for (int i = 0; i < n; i++) {
@@ -138,6 +138,16 @@ void sprite_draw(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, in
             if (row >= r->h) break;
         }
     }
+}
+
+void sprite_draw(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h)
+{
+    draw_rle(c, r, dst, w, h, 0, 0);
+}
+
+void sprite_draw_flip(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h, int top)
+{
+    draw_rle(c, r, dst, w, h, 1, top);
 }
 
 void fg_composite(const SpriteCtx *c, const FgBlock *b, uint32_t *dst, int w, int h, int hud)

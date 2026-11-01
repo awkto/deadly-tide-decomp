@@ -16,6 +16,8 @@
 #define CHAIN_W 320
 #define CHAIN_H 200
 
+struct Game;
+
 typedef struct {
     const char *data_dir;   /* searched as DIR/NAME.L96 and DIR/cd* /NAME.L96 */
     const char *level;      /* file stem or file name, e.g. LEVEL01 or LEVEL01.L96 */
@@ -27,6 +29,8 @@ typedef struct {
     int         no_auto_look; /* stand-in until look-picking exists: a segment that would loop
                                * onto itself (hub, LEVEL02 seg 8 ...) takes its first look-only
                                * (0x80) hotspot instead. Set to keep looping like the engine. */
+    struct Game *game;      /* combat layer (game.h), may be NULL: then branch conditions see a
+                             * 'perfect player' (full health, every listed actor destroyed) */
 } ChainOpts;
 
 typedef struct Chain Chain;
@@ -51,6 +55,10 @@ const uint32_t *chain_frame(const Chain *c);   /* CHAIN_W x CHAIN_H XRGB8888 */
 /* ESC (Key_Skip). Returns 0 ignored, 1 jumped (buffered groups dropped: the caller
  * should drop queued audio too), 2 quit requested. */
 int chain_skip(Chain *c);
+
+/* Nonzero once after the chain jumped on its own (death / kill branch): groups were dropped,
+ * so the caller should drop queued audio too, as after chain_skip. */
+int chain_take_jump(Chain *c);
 
 /* Current position, for logs: file stem and segment on screen. */
 const char *chain_level(const Chain *c);

@@ -14,8 +14,64 @@
 #include <string.h>
 
 #include "chain.h"
+#include "game.h"
+#include "input.h"
 #include "l96.h"
 #include "platform.h"
+
+/* ---- Combat options --------------------------------------------------------
+ * --difficulty takes the registry value DifficultyLevel (COMBAT_SPEC §11): 1 (default) -> index 0
+ * "normal", 2 -> index 2 "hard", anything else (0) -> index 1 "easy". */
+typedef struct {
+    int off, bot, idle, spray, god, difficulty, max_deaths, verbose;
+} CombatOpts;
+
+static CombatOpts g_cx = { 0, 0, 0, 0, 0, 1, 0, 0 };
+
+static int difficulty_index(int reg) { return reg == 1 ? 0 : reg == 2 ? 2 : 1; }
+
+/* Windowed input: absolute mouse mapped onto the 320x200 frame; left = fire, right = alt,
+ * middle = ACT; Space = ACT request. A joystick, if present, overrides the mouse position. */
+static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState *io)
+{
+    (void)ud; (void)g; (void)objs;
+    int x, y; uint32_t b;
+    if (plat_mouse(&x, &y, &b)) { io->x = x; io->y = y; io->buttons = b; }
+    if (plat_joystick(&x, &y, &b)) {
+        /* Flight-style default (§3.1): push forward -> crosshair goes down. */
+        io->x = (x + 32768) * CHAIN_W / 65536;
+        io->y = CHAIN_H - 1 - (y + 32768) * CHAIN_H / 65536;
+        io->buttons |= b;
+    }
+    if (plat_act_requested()) io->act = 1;
+}
+
+/* DirectSound volume (hundredths of a dB) and pan -> linear 0..256 gain and -256..256 balance. */
+static int db100_to_lin(int db) { double v = 256.0; for (int i = 0; i < -db / 100 && i < 100; i++) v *= 0.891251; return (int)v; }
+
+static void sfx_out(void *ud, const uint8_t *pcm, size_t n, int vol, int pan)
+{
+    (void)ud;
+    int p = pan > 0 ? 256 - db100_to_lin(-pan) : pan < 0 ? db100_to_lin(pan) - 256 : 0;
+    plat_sfx_play(pcm, n, db100_to_lin(vol), p);
+}
+
+static Game *combat_new(int windowed)
+{
+    if (g_cx.off) return NULL;
+    GameOpts go = { 0 };
+    go.difficulty = difficulty_index(g_cx.difficulty);
+    go.god = g_cx.god;
+    go.verbose = g_cx.verbose;
+    if (g_cx.idle) go.input = input_idle;
+    else if (g_cx.spray) go.input = input_spray;
+    else if (g_cx.bot || !windowed) go.input = input_bot;    /* headless default: the bot */
+    else go.input = input_mouse;
+    if (windowed) go.sfx = sfx_out;
+    Game *g = game_new(&go);
+    if (!g) fprintf(stderr, "out of memory\n");
+    return g;
+}
 
 /* ---- Player ---------------------------------------------------------------
  * The scene chain (chain.c) does the streaming, branching and compositing; this
@@ -39,6 +95,7 @@ static void sink_audio(void *ud, const uint8_t *pcm, size_t n)
 
 typedef struct {
     Chain *c;
+    Game  *game;
     AudioSink sink;
     long frame_no, max_frames;
     int pace, rc, drain_ticks, ended;
@@ -47,10 +104,12 @@ typedef struct {
 static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames, int pace)
 {
     memset(p, 0, sizeof *p);
-    p->c = chain_open(co);
-    if (!p->c) return 1;
+    ChainOpts o = *co;
+    p->game = o.game = combat_new(1);
+    p->c = chain_open(&o);
+    if (!p->c) { game_free(p->game); p->game = NULL; return 1; }
     if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
-        chain_close(p->c); p->c = NULL; return 1;
+        chain_close(p->c); p->c = NULL; game_free(p->game); p->game = NULL; return 1;
     }
     p->sink.pace = pace;
     p->pace = pace;
@@ -92,7 +151,12 @@ static int play_tick(Player *p)
         int img = 0, r = chain_step(c, &img, sink_audio, &p->sink);
         if (r < 0) { p->rc = 1; break; }
         if (r == 0) { p->ended = 1; break; }
+        if (chain_take_jump(c) && p->pace) {      /* death / kill branch dropped buffered groups */
+            p->sink.audio_put -= plat_audio_queued();
+            plat_audio_clear();
+        }
         p->frame_no++;
+        if (p->game && g_cx.max_deaths && game_stats(p->game)->deaths >= g_cx.max_deaths) { p->ended = 1; break; }
         if (img) shown = 1;
         if (!p->pace) break;
         if (chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; break; }
@@ -104,7 +168,9 @@ static int play_tick(Player *p)
 static int play_finish(Player *p)
 {
     fprintf(stderr, "sequence: %s\n", chain_history(p->c));
+    if (p->game) game_print_stats(p->game, stderr);
     chain_close(p->c);
+    game_free(p->game);
     plat_shutdown();
     return p->rc;
 }
@@ -140,16 +206,26 @@ static int write_ppm(const char *path, const uint32_t *px, int w, int h)
 
 /* Headless: run the chain without a window or audio. With an output dir, every
  * `every`-th tick that has a picture is written as frame_NNNNNN.ppm (NNNNNN = tick). */
-static int run_headless(const ChainOpts *co, const char *outdir, long max_frames, int every)
+static int run_headless(const ChainOpts *co0, const char *outdir, long max_frames, int every)
 {
+    ChainOpts o = *co0;
+    const ChainOpts *co = &o;
+    Game *game = o.game = combat_new(0);
+    if (!g_cx.off && !game) return 1;
     Chain *c = chain_open(co);
-    if (!c) return 1;
+    if (!c) { game_free(game); return 1; }
     long tick = 0, written = 0;
     int rc = 0;
     while (!(max_frames && tick >= max_frames)) {
         int img = 0, r = chain_step(c, &img, NULL, NULL);
         if (r < 0) { rc = 1; break; }
         if (r == 0) break;
+        chain_take_jump(c);
+        if (game && g_cx.max_deaths && game_stats(game)->deaths >= g_cx.max_deaths) {
+            fprintf(stderr, "stopping after %d deaths\n", g_cx.max_deaths);
+            tick++;
+            break;
+        }
         if (outdir && tick % every == 0) {
             char path[1024];
             snprintf(path, sizeof path, "%s/frame_%06ld.ppm", outdir, tick);
@@ -162,7 +238,9 @@ static int run_headless(const ChainOpts *co, const char *outdir, long max_frames
     }
     fprintf(stderr, "ticks %ld, wrote %ld frames\n", tick, written);
     printf("sequence: %s\n", chain_history(c));
+    if (game) game_print_stats(game, stdout);
     chain_close(c);
+    game_free(game);
     return rc;
 }
 
@@ -184,7 +262,16 @@ static void usage(void)
         "  --chain            with --file: follow the scene graph after the segment\n"
         "  --seed N           branch PRNG seed (default 1)\n"
         "  --verbose          print each segment as it starts\n"
-        "  --no-auto-look     let look-choice segments loop (default: take their first window)\n");
+        "  --no-auto-look     let look-choice segments loop (default: take their first window)\n"
+        "combat:\n"
+        "  --bot              aimbot input (default when headless)\n"
+        "  --idle             never fire\n"
+        "  --spray            hold fire at the screen centre (heat lockout test)\n"
+        "  --god              attract-mode regeneration: the player cannot die\n"
+        "  --difficulty R     registry DifficultyLevel 0..2: 1 normal (default), 0 easy, 2 hard\n"
+        "  --max-deaths N     stop after N deaths (headless default 3, 0 = never)\n"
+        "  --no-combat        no gameplay layer (branches see a perfect player)\n"
+        "  --combat-log       log deaths, kill branches and lockouts\n");
 }
 
 int main(int argc, char **argv)
@@ -193,6 +280,7 @@ int main(int argc, char **argv)
     int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, no_auto_look = 0;
     long count = 0;
     unsigned long seed = 1;
+    int max_deaths = -1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         int more = i + 1 < argc;
@@ -211,6 +299,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--chain")) chain = 1;
         else if (!strcmp(a, "--verbose")) verbose = 1;
         else if (!strcmp(a, "--no-auto-look")) no_auto_look = 1;
+        else if (!strcmp(a, "--bot")) g_cx.bot = 1;
+        else if (!strcmp(a, "--idle")) g_cx.idle = 1;
+        else if (!strcmp(a, "--spray")) g_cx.spray = 1;
+        else if (!strcmp(a, "--god")) g_cx.god = 1;
+        else if (!strcmp(a, "--no-combat")) g_cx.off = 1;
+        else if (!strcmp(a, "--combat-log")) g_cx.verbose++;
+        else if (!strcmp(a, "--difficulty") && more) g_cx.difficulty = atoi(argv[++i]);
+        else if (!strcmp(a, "--max-deaths") && more) max_deaths = atoi(argv[++i]);
         else { usage(); return 2; }
     }
     if ((!file && !level) || scale < 1 || every < 1) { usage(); return 2; }
@@ -225,6 +321,8 @@ int main(int argc, char **argv)
     co.seed = (uint32_t)seed;
     co.verbose = verbose;
     co.no_auto_look = no_auto_look;
+    if (g_cx.difficulty < 0 || g_cx.difficulty > 2) { usage(); return 2; }
+    g_cx.max_deaths = max_deaths >= 0 ? max_deaths : (dump || headless) ? 3 : 0;
     if (dump || headless) return run_headless(&co, dump, count, every);
     return play(&co, scale, count, pace);
 }

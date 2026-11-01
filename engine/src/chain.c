@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "cinepak.h"
+#include "game.h"
 #include "l96.h"
 #include "scene.h"
 #include "sprites.h"
@@ -14,6 +15,8 @@
 #define RING 16
 #define TEX  128            /* type-6 preload texture: 128x128 Cinepak key frame */
 #define ESC_TICKS 15        /* Key_Skip is rate limited to once per second */
+#define BRANCH_LEAD 2       /* with combat: Branch_Resolve samples the game state once at most this many
+                             * groups are buffered (the original reader ran 1-2 groups ahead) */
 
 typedef struct {
     L96Group g;
@@ -50,6 +53,7 @@ struct Chain {
     int  dec_ready;
     uint32_t frame[CHAIN_W * CHAIN_H];
     long ticks, last_esc;
+    int  jumped;
 
     char  *hist; size_t hist_len, hist_cap;
 };
@@ -82,6 +86,10 @@ static int open_level(Chain *c, const char *stem)
         }
         snprintf(c->stem, sizeof c->stem, "%s", stem);
         c->open = 1;
+        if (c->o.game && game_level_load(c->o.game, &c->f, &c->spr) != 0) {
+            fprintf(stderr, "chain: cannot load the gameplay tables of %s\n", path);
+            return -1;
+        }
         return 0;
     }
     fprintf(stderr, "chain: %s.L96 not found under %s (or its cd*/ dirs)\n", stem, c->o.data_dir);
@@ -245,6 +253,12 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
             c->rk++;
         }
         if (c->rk >= sg->count) {
+            if (c->o.game && !c->o.single) {
+                /* Resolve only when the display side is within BRANCH_LEAD groups of the end, with no
+                 * death / kill request pending (that one wins: chain_step jumps). */
+                if (game_branch_pending(c->o.game) || c->n > BRANCH_LEAD) break;
+                game_fill_state(c->o.game, &c->gs);
+            }
             if (c->accumulate) decode_preload(c);
             if (c->o.single) { c->read_done = 1; continue; }
             int nxt = scene_successor(&c->sc, c->rseg, &c->gs, c->picked);
@@ -286,9 +300,32 @@ static void draw_placeholder(Chain *c, int tex)
         memcpy(c->frame + (size_t)(oy + y) * CHAIN_W + ox, c->tex[tex] + (size_t)y * TEX, TEX * sizeof(uint32_t));
 }
 
+static void apply_branch(Chain *c, int target)
+{
+    if (c->o.verbose) fprintf(stderr, "branch request: %s:%d -> %d\n", c->stem, chain_segment(c), target);
+    drop_ring(c);
+    c->pending = 0;
+    c->jumped = 1;
+    if (target >= 0 && target < c->sc.n_segments) {
+        c->rseg = target; c->rk = 0; c->read_done = 0;
+        c->disp_seg = -1;
+    } else {
+        set_exit(c, target);
+    }
+}
+
+int chain_take_jump(Chain *c)
+{
+    int j = c->jumped;
+    c->jumped = 0;
+    return j;
+}
+
 int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
 {
     *new_image = 0;
+    int req;
+    if (c->o.game && game_take_branch(c->o.game, &req)) apply_branch(c, req);
     if (c->n == 0 && chain_fill(c, 1, fn, ud) != 0) return -1;
     if (c->n == 0) return 0;
 
@@ -300,12 +337,18 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
         if (s->seg != c->disp_seg || s->k == 0) {
             c->disp_seg = s->seg;
             hist_add(c, c->stem, s->seg);
+            if (c->o.game) game_segment_start(c->o.game, s->seg, c->f.segments[s->seg].raw);
             if (c->o.verbose)
                 fprintf(stderr, "segment %s:%d type %d groups %d (tick %ld)\n", c->stem, s->seg, si->type,
                         c->f.segments[s->seg].count, c->ticks);
         }
         c->nblocks = s->g.fg_size ? fg_parse(s->g.fg, s->g.fg_size, c->blocks, L96_FRAMES_PER_GROUP) : 0;
     }
+
+    FgBlock *blk = c->vf < c->nblocks ? &c->blocks[c->vf] : NULL;
+    const uint8_t *fhdr = s->g.n_frames ? s->g.frame[c->vf].hdr : NULL;
+    if (c->o.game) game_frame_pre(c->o.game, blk, fhdr);   /* actor states, explosion sprites */
+    int drawn = 0;
 
     if (s->g.n_frames) {
         const uint8_t *d = s->g.frame[c->vf].data;
@@ -330,13 +373,17 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
             const uint8_t *hdr = s->g.frame[c->vf].hdr;
             uint32_t flags = hdr[0x20] | hdr[0x21] << 8 | hdr[0x22] << 16 | (uint32_t)hdr[0x23] << 24;
             /* Hud_Draw (and with it Obj_DrawStatic, kind 8) runs only on aim frames. */
-            fg_composite(&c->spr, &c->blocks[c->vf], c->frame, CHAIN_W, CHAIN_H, (flags & 1) != 0);
+            /* With combat, kind 8 is drawn by the game's Hud_Draw (after the gun flash). */
+            fg_composite(&c->spr, &c->blocks[c->vf], c->frame, CHAIN_W, CHAIN_H, !c->o.game && (flags & 1) != 0);
         }
         *new_image = 1;
+        drawn = 1;
     } else if (si->type == SEG_FREELOOK && c->vf == 0) {
         draw_placeholder(c, s->tex);
         *new_image = 1;
     }
+
+    if (c->o.game) game_frame_post(c->o.game, blk, fhdr, c->frame, drawn && si->type != SEG_FREELOOK && si->type != SEG_PANO);
 
     c->ticks++;
     if (++c->vf >= nticks) {

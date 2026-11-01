@@ -35,7 +35,7 @@ typedef struct {
     size_t   pixels_size;
 } FgRecord;
 
-typedef struct {
+typedef struct FgBlock {
     int      count;               /* records kept (<= FG_MAX_RECS) */
     FgRecord rec[FG_MAX_RECS];
 } FgBlock;
@@ -58,6 +58,10 @@ int  fg_parse(const uint8_t *fg, size_t fg_size, FgBlock *blocks, int max_blocks
 
 /* Draw one record onto an XRGB8888 frame (w x h, top-down), clipped. */
 void sprite_draw(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h);
+
+/* Same, drawn with stride +w as the engine's gun flash does: RLE row k (the sprite's bottom row
+ * first) lands on top-down row top + k, so the sprite appears upside down. */
+void sprite_draw_flip(const SpriteCtx *c, const FgRecord *r, uint32_t *dst, int w, int h, int top);
 
 /* Draw a block in engine order: kinds 1|2, then kind 4 (Obj_DrawLayer), then kind 8
  * (Obj_DrawStatic, HUD) if `hud` is set. */

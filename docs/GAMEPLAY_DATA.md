@@ -150,8 +150,9 @@ LEVEL01 contents: type-1 segments hold kinds 2 and 8 only. Most frames carry one
 on the screen. They draw them into the panorama/texture buffer (0x428a98), using scene dwords
 0x3c/0x40 (512×512 in LEVEL01 type 6) as stride and height, with the wrap flag set. Masks 1, 2 and 4
 are drawn into that buffer, and then the buffer is projected. In type-6 data the draw rect looks
-like a 128-wide strip with y in the thousands (e.g. x 0, y 5235, 128×2854), so the
-draw-coordinate mapping there is **not decoded**; the cube-face rects at +0x30 carry the hit areas.
+like a 128-wide strip with y in the thousands (e.g. x 0, y 5235, 128×2854): that is a position in
+the 128×12288 tile buffer (tile × 128 + row) — see `docs/FREELOOK_SPEC.md`. Kind-1 sprites stay
+painted (hub badges), kind-2 are erased after each frame; the cube-face rects at +0x30 carry the hit areas.
 
 ## 4. Sprite RLE
 

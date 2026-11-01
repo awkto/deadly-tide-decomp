@@ -9,7 +9,7 @@ static SDL_Renderer    *g_ren;
 static SDL_Texture     *g_tex;
 static int              g_tex_w, g_tex_h;
 static SDL_AudioStream *g_audio;
-static int              g_skip, g_act;
+static int              g_skip, g_act, g_any_input;
 static uint32_t         g_keys;
 static int              g_frame_w = 320, g_frame_h = 200;
 static SDL_Joystick    *g_joy;
@@ -122,6 +122,8 @@ int plat_quit_requested(void)
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_EVENT_QUIT) quit = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q) quit = 1;
+        if ((ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            g_any_input = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE && !ev.key.repeat) g_skip = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_SPACE && !ev.key.repeat) g_act = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F2 && !ev.key.repeat) g_keys |= PLAT_KEY_F2;
@@ -156,6 +158,13 @@ int plat_act_requested(void)
 {
     int a = g_act;
     g_act = 0;
+    return a;
+}
+
+int plat_any_input(void)
+{
+    int a = g_any_input;
+    g_any_input = 0;
     return a;
 }
 

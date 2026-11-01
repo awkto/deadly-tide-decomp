@@ -69,6 +69,8 @@ struct Chain {
     int  look_branch;              /* cut pending: apply at the next step */
     int  goal;                     /* bot: look window to take (index), -1 none */
 
+    int  demo_loops;               /* demo attract: completed passes back to LOGOS */
+
     /* Save state (SCENE_GRAPH §3). */
     int  cur_level;                /* g_curLevelNum 0x4215b4: NN of the last LevelNN file */
     int  ctrl_pick;                /* 0x4213ac: Ctrl held during the hub pick */
@@ -268,6 +270,9 @@ static void set_exit(Chain *c, int target)
     int idx = -1 - target;
     if (idx < 0 || (uint32_t)idx >= c->f.n_names) { fprintf(stderr, "chain: bad exit %d\n", target); return; }
     const char *name = c->f.names[idx];
+    /* Demo attract (SCENE_GRAPH §5): LEVEL01 ends the pass; the reader replaces the file with
+     * LOGOS so the loop repeats. */
+    if (c->o.demo && !strcmp(c->stem, "LEVEL01")) name = "LOGOS";
     /* Level complete: the finished frontier level raises HighestLevel and clears SavePoint. */
     if (frontier(c)) {
         c->o.save->highest_level++;
@@ -290,6 +295,7 @@ static int switch_file(Chain *c)
     c->pending = 0;
     close_level(c);
     if (open_level(c, name) != 0) { c->ended = 1; return -1; }
+    if (c->o.demo && !strcmp(name, "LOGOS")) c->demo_loops++;   /* one attract pass done */
     start_read(c, c->pending_seg < (int)c->f.n_segments ? c->pending_seg : 0);
     c->read_done = 0;
     c->disp_seg = -1;
@@ -345,7 +351,11 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
                         break;
                     }
             }
-            if (nxt >= 0 && nxt < c->sc.n_segments) start_read(c, nxt);
+            if (c->o.demo && nxt == 0 && !strcmp(c->stem, "LEVEL01")) {
+                /* LEVEL01 streams its own segment 0 again: end the demo pass back at LOGOS. */
+                snprintf(c->pending_name, sizeof c->pending_name, "%s", "LOGOS");
+                c->pending = 1; c->pending_seg = 0; c->read_done = 1;
+            } else if (nxt >= 0 && nxt < c->sc.n_segments) start_read(c, nxt);
             else set_exit(c, nxt);
         }
     }
@@ -677,6 +687,7 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
 const uint32_t *chain_frame(const Chain *c) { return c->frame; }
 const char *chain_level(const Chain *c) { return c->stem; }
 int chain_segment(const Chain *c) { return c->disp_seg >= 0 ? c->disp_seg : c->rseg; }
+int chain_demo_loops(const Chain *c) { return c->demo_loops; }
 const char *chain_history(const Chain *c) { return c->hist ? c->hist : ""; }
 
 /* ---- ESC ----------------------------------------------------------------------- */
@@ -705,7 +716,7 @@ int chain_skip(Chain *c)
     int seg = chain_segment(c);
     int t = scene_esc(&c->sc, seg);
     if (t == SCENE_ESC_IGNORE) return 0;
-    if (t == SCENE_ESC_HUB) return jump_file(c, "LEVEL00");
+    if (t == SCENE_ESC_HUB) return jump_file(c, c->o.demo ? "LOGOS" : "LEVEL00");
     drop_ring(c);
     c->pending = 0;
     if (t >= 0 && t < c->sc.n_segments) {

@@ -34,6 +34,8 @@ int  plat_mouse(int *x, int *y, uint32_t *buttons);
 int  plat_joystick(int *x, int *y, uint32_t *buttons);
 /* Nonzero once per Space press seen by plat_quit_requested() (the ACT key). */
 int  plat_act_requested(void);
+/* Nonzero once per any key-down or mouse-button-down seen by plat_quit_requested() (demo exit). */
+int  plat_any_input(void);
 
 /* Sound effects: u8 mono PCM at the audio rate, mixed over the streamed audio.
  * vol 0..256 (256 = full), pan -256 (left) .. 256 (right). The PCM is copied. */

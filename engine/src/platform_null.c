@@ -31,6 +31,7 @@ void plat_audio_clear(void) {}
 int  plat_mouse(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
 int  plat_joystick(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
 int  plat_act_requested(void) { return 0; }
+int  plat_any_input(void) { return 0; }
 void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan)
 {
     (void)pcm_u8_mono; (void)n; (void)vol; (void)pan;

@@ -24,10 +24,10 @@
  * --difficulty takes the registry value DifficultyLevel (COMBAT_SPEC §11): 1 (default) -> index 0
  * "normal", 2 -> index 2 "hard", anything else (0) -> index 1 "easy". */
 typedef struct {
-    int off, bot, idle, spray, god, difficulty, max_deaths, verbose;
+    int off, bot, idle, spray, god, demo, difficulty, max_deaths, verbose;
 } CombatOpts;
 
-static CombatOpts g_cx = { 0, 0, 0, 0, 0, 1, 0, 0 };
+static CombatOpts g_cx = { 0, 0, 0, 0, 0, 0, 1, 0, 0 };
 
 static int difficulty_index(int reg) { return reg == 1 ? 0 : reg == 2 ? 2 : 1; }
 
@@ -82,6 +82,7 @@ static Game *combat_new(int windowed)
 
 static const char *g_look_script;   /* --look-script: scripted free-look camera */
 static const char *g_stop_level;    /* --stop-level: end the run when the chain enters this file */
+static long g_demo_loops;           /* --demo-loops: headless stop after N attract passes (0 = never) */
 
 /* --keys "F5@300,F2@900": headless function-key presses at the given ticks. */
 #define MAX_KEYS 16
@@ -166,6 +167,7 @@ static int play_tick(Player *p)
 {
     Chain *c = p->c;
     if (plat_quit_requested()) return 1;
+    if (g_cx.demo && plat_any_input()) return 1;   /* any key / click ends the attract loop */
     if (plat_skip_requested()) {
         int r = chain_skip(c);
         if (r == 2) return 1;
@@ -279,6 +281,11 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
             break;
         }
         if (stop_level_reached(c)) { fprintf(stderr, "reached %s, stopping\n", g_stop_level); tick++; break; }
+        if (g_demo_loops && chain_demo_loops(c) >= g_demo_loops && !strcmp(chain_level(c), "LOGOS")) {
+            fprintf(stderr, "demo: %d attract loop(s) done\n", chain_demo_loops(c));
+            tick++;
+            break;
+        }
         if (outdir && tick % every == 0) {
             char path[1024];
             snprintf(path, sizeof path, "%s/frame_%06ld.ppm", outdir, tick);
@@ -323,6 +330,9 @@ static void usage(void)
         "  --hub-between-levels  a finished level returns to the hub (default: next level, as the original)\n"
         "  --stop-level STEM  stop when the chain enters file STEM (e.g. LEVEL02)\n"
         "  --keys LIST        headless key presses, e.g. \"F5@300,F2@900\" (tick numbers)\n"
+        "  --demo             attract mode: start at LOGOS, bot + god, loop LEVEL01 back to LOGOS\n"
+        "                     (windowed: any key or click quits; headless: see --demo-loops)\n"
+        "  --demo-loops N     headless demo: stop after N passes back to LOGOS (default 1)\n"
         "combat:\n"
         "  --bot              aimbot input (default when headless)\n"
         "  --idle             never fire\n"
@@ -342,7 +352,7 @@ int main(int argc, char **argv)
     int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, auto_look = 0;
     int hub_between = 0, set_highest = -1, set_sp = -1, diff_given = 0;
     const char *save_path = NULL, *pilot = "Player";
-    long count = 0;
+    long count = 0, demo_loops = -1;
     unsigned long seed = 1;
     int max_deaths = -1;
     for (int i = 1; i < argc; i++) {
@@ -371,6 +381,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--hub-between-levels")) hub_between = 1;
         else if (!strcmp(a, "--stop-level") && more) g_stop_level = argv[++i];
         else if (!strcmp(a, "--keys") && more) { if (parse_keys(argv[++i]) != 0) { usage(); return 2; } }
+        else if (!strcmp(a, "--demo")) { g_cx.demo = 1; g_cx.god = 1; g_cx.bot = 1; }
+        else if (!strcmp(a, "--demo-loops") && more) demo_loops = atol(argv[++i]);
         else if (!strcmp(a, "--bot")) g_cx.bot = 1;
         else if (!strcmp(a, "--idle")) g_cx.idle = 1;
         else if (!strcmp(a, "--spray")) g_cx.spray = 1;
@@ -382,6 +394,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
+    if (g_cx.demo && !file && !level) level = "LOGOS";   /* the attract loop starts at the logo films */
     if ((!file && !level) || scale < 1 || every < 1) { usage(); return 2; }
 
     ChainOpts co;
@@ -395,6 +408,7 @@ int main(int argc, char **argv)
     co.verbose = verbose;
     co.auto_look = auto_look;
     co.hub_between_levels = hub_between;
+    co.demo = g_cx.demo;
     if (g_cx.difficulty < 0 || g_cx.difficulty > 2) { usage(); return 2; }
 
     /* Pilot progress (the registry values, save.h). */
@@ -412,7 +426,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "pilot %s: HighestLevel %d SavePoint %d ACTNum %d DifficultyLevel %d (%s)\n", sv.pilot,
                 sv.highest_level, sv.save_point, sv.act_num, sv.difficulty, sv.path[0] ? sv.path : "not saved");
     co.save = co.single ? NULL : &sv;
+    if (g_cx.demo) co.save = NULL;   /* attract mode is not the pilot's progress */
     g_cx.max_deaths = max_deaths >= 0 ? max_deaths : (dump || headless) ? 3 : 0;
+    g_demo_loops = g_cx.demo ? (demo_loops >= 0 ? demo_loops : (headless ? 1 : 0)) : 0;
     if (dump || headless) return run_headless(&co, dump, count, every);
     return play(&co, scale, count, pace);
 }

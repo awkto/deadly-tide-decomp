@@ -34,6 +34,8 @@ typedef struct {
                              * hotspot. Off by default: the view picks (Hotspot_Pick). */
     int         hub_between_levels; /* non-original: a finished LEVELnn returns to the hub LEVEL00
                                      * instead of chaining straight into the next level */
+    int         demo;       /* attract mode (CurrentPlayer == "Demo"): start at LOGOS, follow
+                             * LOGOS -> INTRO -> INTROB -> LEVEL01, then loop back to LOGOS */
     SaveData   *save;       /* pilot progress (save.h), may be NULL: no save points, hub lock 1 */
     struct Game *game;      /* combat layer (game.h), may be NULL: then branch conditions see a
                              * 'perfect player' (full health, every listed actor destroyed) */
@@ -75,6 +77,8 @@ int chain_take_jump(Chain *c);
 /* Current position, for logs: file stem and segment on screen. */
 const char *chain_level(const Chain *c);
 int         chain_segment(const Chain *c);
+/* Demo attract mode: completed passes back to LOGOS (0 unless ChainOpts.demo). */
+int         chain_demo_loops(const Chain *c);
 /* Space separated log of every segment started, e.g. "LEVEL01:0 LEVEL01:1 ... LEVEL02:0". */
 const char *chain_history(const Chain *c);
 

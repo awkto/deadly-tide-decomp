@@ -8,9 +8,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+option(DT_HEADLESS "Build without SDL: headless modes only (platform_null.c)" OFF)
+
 # SDL3 is the only dependency, built from source and linked statically.
 # Emscripten ships its own SDL3 port (--use-port=sdl3) -- skip the fetch there.
-if(EMSCRIPTEN)
+if(DT_HEADLESS)
+  set(DT_SDL_TARGET "")
+  set(DT_PLATFORM_SRC src/platform_null.c)
+elseif(EMSCRIPTEN)
   set(DT_SDL_TARGET "")
   add_compile_options(--use-port=sdl3)
   add_link_options(--use-port=sdl3)
@@ -28,13 +33,16 @@ else()
   FetchContent_MakeAvailable(SDL3)
   set(DT_SDL_TARGET SDL3::SDL3-static)
 endif()
+if(NOT DT_PLATFORM_SRC)
+  set(DT_PLATFORM_SRC src/platform.c)
+endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
 add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c)
 target_include_directories(dtcore PUBLIC src)
 
 # Platform layer (all SDL calls live in platform.c) + front end.
-add_executable(deadlytide src/main.c src/platform.c)
+add_executable(deadlytide src/main.c ${DT_PLATFORM_SRC})
 target_link_libraries(deadlytide PRIVATE dtcore ${DT_SDL_TARGET})
 
 if(MSVC)

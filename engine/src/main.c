@@ -78,6 +78,8 @@ static Game *combat_new(int windowed)
  * loop only paces it against the audio clock. Structured as init / update /
  * finish so it can later become an Emscripten main-loop callback. */
 
+static const char *g_look_script;   /* --look-script: scripted free-look camera */
+
 #define AHEAD 10   /* groups read ahead of the one on screen (~3.3 s of audio) */
 
 typedef struct {
@@ -107,6 +109,9 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
     ChainOpts o = *co;
     p->game = o.game = combat_new(1);
     p->c = chain_open(&o);
+    if (p->c && g_look_script && chain_set_look_script(p->c, g_look_script) != 0) {
+        fprintf(stderr, "bad --look-script %s\n", g_look_script); chain_close(p->c); p->c = NULL;
+    }
     if (!p->c) { game_free(p->game); p->game = NULL; return 1; }
     if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
         chain_close(p->c); p->c = NULL; game_free(p->game); p->game = NULL; return 1;
@@ -213,6 +218,9 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
     Game *game = o.game = combat_new(0);
     if (!g_cx.off && !game) return 1;
     Chain *c = chain_open(co);
+    if (c && g_look_script && chain_set_look_script(c, g_look_script) != 0) {
+        fprintf(stderr, "bad --look-script %s\n", g_look_script); chain_close(c); game_free(game); return 2;
+    }
     if (!c) { game_free(game); return 1; }
     long tick = 0, written = 0;
     int rc = 0;
@@ -271,7 +279,9 @@ static void usage(void)
         "  --difficulty R     registry DifficultyLevel 0..2: 1 normal (default), 0 easy, 2 hard\n"
         "  --max-deaths N     stop after N deaths (headless default 3, 0 = never)\n"
         "  --no-combat        no gameplay layer (branches see a perfect player)\n"
-        "  --combat-log       log deaths, kill branches and lockouts\n");
+        "  --combat-log       log deaths, kill branches and lockouts\n\n"
+        "  --look-script S    free-look camera: \"yaw,pitch[,roll];...\" (pose per frame, last held)\n"
+        "                     or \"pan[:RATE]\" (yaw += RATE units/frame; 2496 units = 360 deg)\n");
 }
 
 int main(int argc, char **argv)
@@ -307,6 +317,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--combat-log")) g_cx.verbose++;
         else if (!strcmp(a, "--difficulty") && more) g_cx.difficulty = atoi(argv[++i]);
         else if (!strcmp(a, "--max-deaths") && more) max_deaths = atoi(argv[++i]);
+        else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
     if ((!file && !level) || scale < 1 || every < 1) { usage(); return 2; }

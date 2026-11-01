@@ -13,6 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "freelook.h"
+
 #define CHAIN_W 320
 #define CHAIN_H 200
 
@@ -57,5 +59,11 @@ const char *chain_level(const Chain *c);
 int         chain_segment(const Chain *c);
 /* Space separated log of every segment started, e.g. "LEVEL01:0 LEVEL01:1 ... LEVEL02:0". */
 const char *chain_history(const Chain *c);
+
+/* Free-look (type 6) camera input: crosshair position in 320x200, default centred (160,100). */
+void chain_set_look(Chain *c, const FreelookInput *in);
+/* Headless scripted camera, "yaw,pitch[,roll];..." or "pan[:RATE]" (see FreelookScript).
+ * Overrides chain_set_look. Returns 0, -1 on a syntax error. */
+int  chain_set_look_script(Chain *c, const char *script);
 
 #endif

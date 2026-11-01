@@ -22,6 +22,8 @@
  * loop only paces it against the audio clock. Structured as init / update /
  * finish so it can later become an Emscripten main-loop callback. */
 
+static const char *g_look_script;   /* --look-script: scripted free-look camera */
+
 #define AHEAD 10   /* groups read ahead of the one on screen (~3.3 s of audio) */
 
 typedef struct {
@@ -48,6 +50,9 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
 {
     memset(p, 0, sizeof *p);
     p->c = chain_open(co);
+    if (p->c && g_look_script && chain_set_look_script(p->c, g_look_script) != 0) {
+        fprintf(stderr, "bad --look-script %s\n", g_look_script); chain_close(p->c); p->c = NULL;
+    }
     if (!p->c) return 1;
     if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
         chain_close(p->c); p->c = NULL; return 1;
@@ -143,6 +148,9 @@ static int write_ppm(const char *path, const uint32_t *px, int w, int h)
 static int run_headless(const ChainOpts *co, const char *outdir, long max_frames, int every)
 {
     Chain *c = chain_open(co);
+    if (c && g_look_script && chain_set_look_script(c, g_look_script) != 0) {
+        fprintf(stderr, "bad --look-script %s\n", g_look_script); chain_close(c); return 2;
+    }
     if (!c) return 1;
     long tick = 0, written = 0;
     int rc = 0;
@@ -184,7 +192,9 @@ static void usage(void)
         "  --chain            with --file: follow the scene graph after the segment\n"
         "  --seed N           branch PRNG seed (default 1)\n"
         "  --verbose          print each segment as it starts\n"
-        "  --no-auto-look     let look-choice segments loop (default: take their first window)\n");
+        "  --no-auto-look     let look-choice segments loop (default: take their first window)\n"
+        "  --look-script S    free-look camera: \"yaw,pitch[,roll];...\" (pose per frame, last held)\n"
+        "                     or \"pan[:RATE]\" (yaw += RATE units/frame; 2496 units = 360 deg)\n");
 }
 
 int main(int argc, char **argv)
@@ -211,6 +221,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--chain")) chain = 1;
         else if (!strcmp(a, "--verbose")) verbose = 1;
         else if (!strcmp(a, "--no-auto-look")) no_auto_look = 1;
+        else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
     if ((!file && !level) || scale < 1 || every < 1) { usage(); return 2; }

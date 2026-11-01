@@ -12,13 +12,12 @@
 #include "sprites.h"
 
 #define RING 16
-#define TEX  128            /* type-6 preload texture: 128x128 Cinepak key frame */
 #define ESC_TICKS 15        /* Key_Skip is rate limited to once per second */
 
 typedef struct {
     L96Group g;
     int seg, k;
-    int tex;                /* type-6 groups: preload texture slot, -1 none */
+    int tex;                /* type-6 groups: free-look tile preload generation, -1 none */
 } Slot;
 
 struct Chain {
@@ -37,10 +36,9 @@ struct Chain {
     int  pending, pending_seg;     /* switch to file `pending_name` once the ring is empty */
     char pending_name[16];
     int  ended;
-    int  accumulate;               /* collecting the preload for the following type-6 segment */
-    uint8_t *pre; size_t pre_size, pre_cap;
-    uint32_t tex[2][TEX * TEX];
-    int  tex_ok[2], tex_next, cur_tex;
+    int  accumulate;               /* collecting the free-look tiles for the following type-6 segment */
+    uint8_t *pre[2];               /* FL_NTILES carry tile slots per preload, by generation & 1 */
+    int  pre_gen;                  /* completed preloads (0 = none yet) */
 
     /* Display side. */
     int  vf, disp_seg;
@@ -50,6 +48,12 @@ struct Chain {
     int  dec_ready;
     uint32_t frame[CHAIN_W * CHAIN_H];
     long ticks, last_esc;
+
+    /* Free-look (freelook.h). */
+    Freelook       fl;
+    FreelookInput  look;
+    FreelookScript script;
+    int  fl_gen, fl_frame, fl_entry[3];
 
     char  *hist; size_t hist_len, hist_cap;
 };
@@ -129,7 +133,11 @@ Chain *chain_open(const ChainOpts *o)
     if (!c) return NULL;
     c->o = *o;
     c->disp_seg = -1;
-    c->cur_tex = -1;
+    c->look = (FreelookInput){ CHAIN_W / 2, CHAIN_H / 2 };
+    if (fl_init(&c->fl) != 0 || !(c->pre[0] = calloc(2, (size_t)FL_NTILES * FL_TILE_SLOT))) {
+        fl_free(&c->fl); free(c); return NULL;
+    }
+    c->pre[1] = c->pre[0] + (size_t)FL_NTILES * FL_TILE_SLOT;
     c->last_esc = -ESC_TICKS;
     c->gs = scene_default_state();
     scene_srand(o->seed);
@@ -149,33 +157,53 @@ void chain_close(Chain *c)
     drop_ring(c);
     close_level(c);
     if (c->dec_ready) cinepak_free(&c->dec);
-    free(c->pre);
+    free(c->pre[0]);
+    fl_free(&c->fl);
     free(c->hist);
     free(c);
 }
 
 /* ---- read side ---------------------------------------------------------------- */
 
-/* The 20 groups in front of a type-6 segment carry a 0x44 header + 128x128 Cinepak key
- * frame (L96_FORMAT §6.4). Decode it as the free-look placeholder. */
-static void decode_preload(Chain *c)
+/* The last 20 groups in front of a type-6 segment carry its 96 texture tiles, 5 per group
+ * (1 in the last), FL_TILE_SLOT bytes each (Play_FreeLookEnter 0x407a70). Keep the raw slots;
+ * they are decoded when the type-6 segment reaches the screen. */
+static void collect_tiles(Chain *c, int count, int k, const L96Group *g)
 {
-    int slot = c->tex_next;
-    c->tex_next ^= 1;
-    c->tex_ok[slot] = 0;
-    c->cur_tex = slot;
-    if (c->pre_size < L96_FRAME_HDR_SIZE + 10) return;
-    const uint8_t *cp = c->pre + L96_FRAME_HDR_SIZE;
-    uint32_t sz = cp[1] << 16 | cp[2] << 8 | cp[3];
-    int w = cp[4] << 8 | cp[5], h = cp[6] << 8 | cp[7];
-    if (cp[0] > 1 || w != TEX || h != TEX || L96_FRAME_HDR_SIZE + sz > c->pre_size) return;
-    CinepakDecoder d;
-    if (cinepak_init(&d, TEX, TEX) != 0) return;
-    if (cinepak_decode(&d, cp, sz) == 0) {
-        memcpy(c->tex[slot], d.pixels, sizeof c->tex[slot]);
-        c->tex_ok[slot] = 1;
+    int gi = k - (count - FL_PRELOAD_GROUPS);
+    if (gi < 0) return;
+    uint8_t *dst = c->pre[(c->pre_gen + 1) & 1];
+    for (int t = 0; t < (gi == FL_PRELOAD_GROUPS - 1 ? 1 : 5); t++) {
+        size_t off = (size_t)t * FL_TILE_SLOT;
+        uint8_t *d = dst + (size_t)(gi * 5 + t) * FL_TILE_SLOT;
+        if (off + FL_TILE_SLOT <= g->carry_size) memcpy(d, g->carry + off, FL_TILE_SLOT);
+        else memset(d, 0, FL_TILE_SLOT);
     }
-    cinepak_free(&d);
+}
+
+/* The type 0/1 segment whose `next` is type-6 segment `seg` (the one carrying its tiles). */
+static int freelook_pred(const Chain *c, int seg)
+{
+    if (seg > 0 && c->sc.seg[seg - 1].next == seg && c->sc.seg[seg - 1].type != SEG_FREELOOK) return seg - 1;
+    for (int i = 0; i < c->sc.n_segments; i++)
+        if (c->sc.seg[i].next == seg && c->sc.seg[i].type != SEG_FREELOOK) return i;
+    return -1;
+}
+
+/* Starting the chain on a type-6 segment: read the tiles from its predecessor directly. */
+static void preload_pred(Chain *c, int seg)
+{
+    int p = freelook_pred(c, seg);
+    if (p < 0) return;
+    int n = c->f.segments[p].count;
+    for (int k = n > FL_PRELOAD_GROUPS ? n - FL_PRELOAD_GROUPS : 0; k < n; k++) {
+        L96Group g;
+        memset(&g, 0, sizeof g);
+        if (l96_read_group(&c->f, p, k, &g) != 0) return;
+        collect_tiles(c, n, k, &g);
+        l96_group_free(&g);
+    }
+    c->pre_gen++;
 }
 
 static void set_exit(Chain *c, int target)
@@ -219,24 +247,14 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
             c->picked = si->type == SEG_FREELOOK ? scene_auto_pick(&c->sc, c->rseg) : INT_MIN;
             int nt = si->next >= 0 && si->next < c->sc.n_segments ? c->sc.seg[si->next].type : -1;
             c->accumulate = (si->type == SEG_VIDEO || si->type == SEG_RAIL) && nt == SEG_FREELOOK;
-            c->pre_size = 0;
+            if (si->type == SEG_FREELOOK && c->pre_gen == 0) preload_pred(c, c->rseg);
         }
         if (c->rk < sg->count) {
             Slot *s = &c->ring[(c->head + c->n) % RING];
             if (l96_read_group(&c->f, c->rseg, c->rk, &s->g) != 0) return -1;
             s->seg = c->rseg; s->k = c->rk;
-            s->tex = si->type == SEG_FREELOOK ? c->cur_tex : -1;
-            if (c->accumulate && s->g.carry_size) {
-                if (c->pre_size + s->g.carry_size > c->pre_cap) {
-                    size_t cap = c->pre_cap ? c->pre_cap : 0x100000;
-                    while (cap < c->pre_size + s->g.carry_size) cap *= 2;
-                    uint8_t *p = realloc(c->pre, cap);
-                    if (!p) return -1;
-                    c->pre = p; c->pre_cap = cap;
-                }
-                memcpy(c->pre + c->pre_size, s->g.carry, s->g.carry_size);
-                c->pre_size += s->g.carry_size;
-            }
+            s->tex = si->type == SEG_FREELOOK ? c->pre_gen : -1;
+            if (c->accumulate) collect_tiles(c, sg->count, c->rk, &s->g);
             if (fn) {
                 if (s->g.audio_size >= L96_AUDIO_BYTES) fn(ud, s->g.audio, L96_AUDIO_BYTES);
                 else fn(ud, g_silence, L96_AUDIO_BYTES);   /* keep the audio clock in step */
@@ -245,7 +263,7 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
             c->rk++;
         }
         if (c->rk >= sg->count) {
-            if (c->accumulate) decode_preload(c);
+            if (c->accumulate) c->pre_gen++;
             if (c->o.single) { c->read_done = 1; continue; }
             int nxt = scene_successor(&c->sc, c->rseg, &c->gs, c->picked);
             if (nxt == c->rseg && !c->o.no_auto_look) {
@@ -268,23 +286,42 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
 
 /* ---- display side ------------------------------------------------------------- */
 
-static void draw_placeholder(Chain *c, int tex)
+static int rd16s(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
+
+/* One tick of a type-6 segment: on entry decode its tiles and View_Set the entry pose
+ * (previous segment's 0x18/0x1a/0x46), then camera control + FreeLook_Frame. */
+static void freelook_tick(Chain *c, const Slot *s, int prev_seg)
 {
-    memset(c->frame, 0, sizeof c->frame);
-    int ox = (CHAIN_W - TEX) / 2, oy = (CHAIN_H - TEX) / 2;
-    /* Thin frame so an all-dark texture still reads as "placeholder". */
-    for (int x = ox - 2; x < ox + TEX + 2; x++) {
-        c->frame[(oy - 2) * CHAIN_W + x] = 0x406080;
-        c->frame[(oy + TEX + 1) * CHAIN_W + x] = 0x406080;
+    Freelook *fl = &c->fl;
+    if (c->vf == 0 && s->seg != prev_seg) {
+        if (s->tex != c->fl_gen && s->tex > 0) {
+            const uint8_t *src = c->pre[s->tex & 1];
+            for (int t = 0; t < FL_NTILES; t++)
+                if (fl_load_tile(fl, t, src + (size_t)t * FL_TILE_SLOT, FL_TILE_SLOT) != 0)
+                    fprintf(stderr, "freelook: tile %d of %s:%d not decodable\n", t, c->stem, s->seg);
+            c->fl_gen = s->tex;
+        }
+        int p = prev_seg >= 0 ? prev_seg : freelook_pred(c, s->seg);
+        const uint8_t *raw = p >= 0 ? c->f.segments[p].raw : NULL;
+        c->fl_entry[0] = raw ? rd16s(raw + 0x18) : 0;
+        c->fl_entry[1] = raw ? rd16s(raw + 0x1a) : 0;
+        c->fl_entry[2] = raw ? rd16s(raw + 0x46) : 0;
+        fl_view_set(fl, c->fl_entry[0], c->fl_entry[1], c->fl_entry[2]);
+        fl->mode = c->f.segments[s->seg].raw[0x21];
+        fl->half_fov = c->sc.seg[s->seg].half_fov;
+        fl->hub = !strcmp(c->stem, "LEVEL00");
+        c->fl_frame = 0;
     }
-    for (int y = oy - 2; y < oy + TEX + 2; y++) {
-        c->frame[y * CHAIN_W + ox - 2] = 0x406080;
-        c->frame[y * CHAIN_W + ox + TEX + 1] = 0x406080;
-    }
-    if (tex < 0 || !c->tex_ok[tex]) return;
-    for (int y = 0; y < TEX; y++)
-        memcpy(c->frame + (size_t)(oy + y) * CHAIN_W + ox, c->tex[tex] + (size_t)y * TEX, TEX * sizeof(uint32_t));
+    if (c->script.n || c->script.pan)
+        fl_script_pose(fl, &c->script, c->fl_frame, c->fl_entry[0], c->fl_entry[1], c->fl_entry[2]);
+    else if (c->fl_frame > 0)       /* the first frame shows the entry pose */
+        fl_control(fl, &c->look);
+    fl_frame(fl, &c->spr, c->vf < c->nblocks ? &c->blocks[c->vf] : NULL, c->frame, 1);
+    c->fl_frame++;
 }
+
+void chain_set_look(Chain *c, const FreelookInput *in) { c->look = *in; }
+int  chain_set_look_script(Chain *c, const char *script) { return fl_script_parse(&c->script, script); }
 
 int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
 {
@@ -296,6 +333,7 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
     const SegInfo *si = &c->sc.seg[s->seg];
     int nticks = s->g.n_frames ? s->g.n_frames : L96_FRAMES_PER_GROUP;
 
+    int prev_seg = c->disp_seg;
     if (c->vf == 0) {
         if (s->seg != c->disp_seg || s->k == 0) {
             c->disp_seg = s->seg;
@@ -333,8 +371,8 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
             fg_composite(&c->spr, &c->blocks[c->vf], c->frame, CHAIN_W, CHAIN_H, (flags & 1) != 0);
         }
         *new_image = 1;
-    } else if (si->type == SEG_FREELOOK && c->vf == 0) {
-        draw_placeholder(c, s->tex);
+    } else if (si->type == SEG_FREELOOK) {
+        freelook_tick(c, s, prev_seg);
         *new_image = 1;
     }
 

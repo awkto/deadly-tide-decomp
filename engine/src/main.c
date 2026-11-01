@@ -18,6 +18,7 @@
 #include "input.h"
 #include "l96.h"
 #include "platform.h"
+#include "save.h"
 
 /* ---- Combat options --------------------------------------------------------
  * --difficulty takes the registry value DifficultyLevel (COMBAT_SPEC §11): 1 (default) -> index 0
@@ -37,6 +38,7 @@ static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState
     (void)ud; (void)g; (void)objs;
     int x, y; uint32_t b;
     if (plat_mouse(&x, &y, &b)) { io->x = x; io->y = y; io->buttons = b; }
+    if (plat_ctrl_held()) io->buttons |= IN_CTRL;
     if (plat_joystick(&x, &y, &b)) {
         /* Flight-style default (§3.1): push forward -> crosshair goes down. */
         io->x = (x + 32768) * CHAIN_W / 65536;
@@ -79,6 +81,43 @@ static Game *combat_new(int windowed)
  * finish so it can later become an Emscripten main-loop callback. */
 
 static const char *g_look_script;   /* --look-script: scripted free-look camera */
+static const char *g_stop_level;    /* --stop-level: end the run when the chain enters this file */
+
+/* --keys "F5@300,F2@900": headless function-key presses at the given ticks. */
+#define MAX_KEYS 16
+static struct { long tick; int key; } g_keys[MAX_KEYS];
+static int g_nkeys;
+
+static int parse_keys(const char *s)
+{
+    while (*s && g_nkeys < MAX_KEYS) {
+        int k;
+        if (!strncmp(s, "F2@", 3)) k = 2; else if (!strncmp(s, "F5@", 3)) k = 5; else return -1;
+        char *e;
+        g_keys[g_nkeys].tick = strtol(s + 3, &e, 10);
+        if (e == s + 3) return -1;
+        g_keys[g_nkeys++].key = k;
+        s = *e == ',' ? e + 1 : e;
+        if (*e && *e != ',') return -1;
+    }
+    return 0;
+}
+
+/* F2 / F5 for this tick (windowed: the keyboard; headless: --keys). 1 = the chain jumped. */
+static int fkeys(Chain *c, long tick, uint32_t plat)
+{
+    int j = 0;
+    for (int i = 0; i < g_nkeys; i++)
+        if (g_keys[i].tick == tick) plat |= g_keys[i].key == 2 ? PLAT_KEY_F2 : PLAT_KEY_F5;
+    if (plat & PLAT_KEY_F5) j |= chain_restart_level(c);
+    if (plat & PLAT_KEY_F2) j |= chain_to_hub(c);
+    return j;
+}
+
+static int stop_level_reached(const Chain *c)
+{
+    return g_stop_level && !strcmp(chain_level(c), g_stop_level);
+}
 
 #define AHEAD 10   /* groups read ahead of the one on screen (~3.3 s of audio) */
 
@@ -135,6 +174,10 @@ static int play_tick(Player *p)
             p->sink.audio_put -= plat_audio_queued();
             plat_audio_clear();
         }
+    }
+    if (fkeys(c, p->frame_no, plat_take_keys()) && p->pace) {
+        p->sink.audio_put -= plat_audio_queued();
+        plat_audio_clear();
     }
     if (!p->ended && chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; return 1; }
     if (p->max_frames && p->frame_no >= p->max_frames) return 1;   /* --count: stop right there */
@@ -225,6 +268,7 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
     long tick = 0, written = 0;
     int rc = 0;
     while (!(max_frames && tick >= max_frames)) {
+        fkeys(c, tick, 0);
         int img = 0, r = chain_step(c, &img, NULL, NULL);
         if (r < 0) { rc = 1; break; }
         if (r == 0) break;
@@ -234,6 +278,7 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
             tick++;
             break;
         }
+        if (stop_level_reached(c)) { fprintf(stderr, "reached %s, stopping\n", g_stop_level); tick++; break; }
         if (outdir && tick % every == 0) {
             char path[1024];
             snprintf(path, sizeof path, "%s/frame_%06ld.ppm", outdir, tick);
@@ -270,7 +315,14 @@ static void usage(void)
         "  --chain            with --file: follow the scene graph after the segment\n"
         "  --seed N           branch PRNG seed (default 1)\n"
         "  --verbose          print each segment as it starts\n"
-        "  --no-auto-look     let look-choice segments loop (default: take their first window)\n"
+        "  --auto-look        look-choice segments take their first window without a pick\n"
+        "  --save FILE        progress file (default <user dir>/dt_save.ini; \"none\" = in memory)\n"
+        "  --pilot NAME       pilot (save section, the registry's CurrentPlayer), default Player\n"
+        "  --highest N        set the pilot's HighestLevel (hub lock) before starting\n"
+        "  --save-point N     set the pilot's SavePoint before starting\n"
+        "  --hub-between-levels  a finished level returns to the hub (default: next level, as the original)\n"
+        "  --stop-level STEM  stop when the chain enters file STEM (e.g. LEVEL02)\n"
+        "  --keys LIST        headless key presses, e.g. \"F5@300,F2@900\" (tick numbers)\n"
         "combat:\n"
         "  --bot              aimbot input (default when headless)\n"
         "  --idle             never fire\n"
@@ -287,7 +339,9 @@ static void usage(void)
 int main(int argc, char **argv)
 {
     const char *data = ".", *file = NULL, *level = NULL, *dump = NULL;
-    int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, no_auto_look = 0;
+    int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, auto_look = 0;
+    int hub_between = 0, set_highest = -1, set_sp = -1, diff_given = 0;
+    const char *save_path = NULL, *pilot = "Player";
     long count = 0;
     unsigned long seed = 1;
     int max_deaths = -1;
@@ -308,14 +362,22 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--one-level")) one_level = 1;
         else if (!strcmp(a, "--chain")) chain = 1;
         else if (!strcmp(a, "--verbose")) verbose = 1;
-        else if (!strcmp(a, "--no-auto-look")) no_auto_look = 1;
+        else if (!strcmp(a, "--auto-look")) auto_look = 1;
+        else if (!strcmp(a, "--no-auto-look")) auto_look = 0;      /* old spelling: now the default */
+        else if (!strcmp(a, "--save") && more) save_path = argv[++i];
+        else if (!strcmp(a, "--pilot") && more) pilot = argv[++i];
+        else if (!strcmp(a, "--highest") && more) set_highest = atoi(argv[++i]);
+        else if (!strcmp(a, "--save-point") && more) set_sp = atoi(argv[++i]);
+        else if (!strcmp(a, "--hub-between-levels")) hub_between = 1;
+        else if (!strcmp(a, "--stop-level") && more) g_stop_level = argv[++i];
+        else if (!strcmp(a, "--keys") && more) { if (parse_keys(argv[++i]) != 0) { usage(); return 2; } }
         else if (!strcmp(a, "--bot")) g_cx.bot = 1;
         else if (!strcmp(a, "--idle")) g_cx.idle = 1;
         else if (!strcmp(a, "--spray")) g_cx.spray = 1;
         else if (!strcmp(a, "--god")) g_cx.god = 1;
         else if (!strcmp(a, "--no-combat")) g_cx.off = 1;
         else if (!strcmp(a, "--combat-log")) g_cx.verbose++;
-        else if (!strcmp(a, "--difficulty") && more) g_cx.difficulty = atoi(argv[++i]);
+        else if (!strcmp(a, "--difficulty") && more) { g_cx.difficulty = atoi(argv[++i]); diff_given = 1; }
         else if (!strcmp(a, "--max-deaths") && more) max_deaths = atoi(argv[++i]);
         else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
@@ -331,8 +393,25 @@ int main(int argc, char **argv)
     co.one_level = one_level;
     co.seed = (uint32_t)seed;
     co.verbose = verbose;
-    co.no_auto_look = no_auto_look;
+    co.auto_look = auto_look;
+    co.hub_between_levels = hub_between;
     if (g_cx.difficulty < 0 || g_cx.difficulty > 2) { usage(); return 2; }
+
+    /* Pilot progress (the registry values, save.h). */
+    static SaveData sv;
+    char path[1200];
+    if (save_path && !strcmp(save_path, "none")) path[0] = 0;
+    else if (save_path) snprintf(path, sizeof path, "%s", save_path);
+    else snprintf(path, sizeof path, "%sdt_save.ini", plat_user_dir());
+    save_load(&sv, path, pilot);
+    if (diff_given) sv.difficulty = g_cx.difficulty; else g_cx.difficulty = sv.difficulty;
+    if (set_highest >= 0) sv.highest_level = set_highest > 20 ? 20 : set_highest;
+    if (set_sp >= 0) sv.save_point = set_sp;
+    if (!co.single && save_store(&sv) != 0) fprintf(stderr, "warning: cannot write %s\n", sv.path);
+    if (verbose || set_highest >= 0)
+        fprintf(stderr, "pilot %s: HighestLevel %d SavePoint %d ACTNum %d DifficultyLevel %d (%s)\n", sv.pilot,
+                sv.highest_level, sv.save_point, sv.act_num, sv.difficulty, sv.path[0] ? sv.path : "not saved");
+    co.save = co.single ? NULL : &sv;
     g_cx.max_deaths = max_deaths >= 0 ? max_deaths : (dump || headless) ? 3 : 0;
     if (dump || headless) return run_headless(&co, dump, count, every);
     return play(&co, scale, count, pace);

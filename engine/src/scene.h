@@ -84,6 +84,14 @@ int  scene_auto_pick(const Scene *sc, int seg);
  * (INT_MIN = resolve now). */
 int  scene_successor(const Scene *sc, int seg, const GameState *gs, int picked);
 
+/* Hotspot_Pick 0x40df80 for a type-6 view: index (0-based within the segment) of the first
+ * record with the 0x80 bit whose yaw window (x0..x1, inclusive, wraps when x0 > x1) and pitch
+ * window (y0..y1) contain (yaw, pitch); -1 if none. `hub` (file LEVEL00.L96): record i is only
+ * enabled when i == 0, i == 15 or i < highest (the level-select lock). */
+int  scene_hotspot_pick(const Scene *sc, int seg, int yaw, int pitch, int hub, int highest);
+/* Is record i of `seg` a look window that is enabled under the hub lock? */
+int  scene_look_enabled(const Scene *sc, int seg, int i, int hub, int highest);
+
 /* Key_Skip 0x414130 inside a level file. Returns:
  *   >= 0           branch to that segment
  *   SCENE_ESC_IGNORE  nothing happens

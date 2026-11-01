@@ -30,6 +30,8 @@ typedef struct {
     int16_t  x, y, w, h;          /* y counted from the bottom row */
     int16_t  bbox[4];             /* x0, y0, x1, y1 inclusive, y from the bottom */
     int32_t  pos[3];
+    uint8_t  face_mask;           /* +0x2c, type 6: bit f = rect on cube face f (FREELOOK_SPEC §4.2) */
+    int16_t  face_rect[3][4];     /* +0x30: x0,y0,x1,y1 in 512x512 face pixels, one per set bit (tint at 0x48 follows) */
     uint8_t  tint;
     const uint8_t *pixels;        /* RLE data (points into the group), NULL if none */
     size_t   pixels_size;

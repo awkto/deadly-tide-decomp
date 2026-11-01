@@ -13,6 +13,7 @@
 #define IN_FIRE 1u    /* buttons bit 0: fire (left mouse, joystick button 1) */
 #define IN_ALT  2u    /* bit 1: alt / path pick (right mouse, button 2) */
 #define IN_ACT  4u    /* bit 2: ACT secondary weapon (button 3) */
+#define IN_CTRL 8u    /* Ctrl held (GetAsyncKeyState(VK_CONTROL) in Branch_PickWithCheat 0x410a90) */
 
 typedef struct {
     int      x, y;        /* crosshair, 0..319 x 0..199, top-down */

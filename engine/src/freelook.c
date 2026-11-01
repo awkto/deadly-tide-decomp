@@ -1,6 +1,7 @@
 /* freelook.c - see freelook.h. Addresses refer to DTPLAYER.EXE (docs/FREELOOK_SPEC.md). */
 #include "freelook.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,7 +74,7 @@ void fl_view_set(Freelook *fl, int yaw, int pitch, int roll)
     fl->m2_roll0 = 0;
 }
 
-static void view_clamp(Freelook *fl)   /* View_Clamp6 0x410a10 */
+void fl_view_clamp(Freelook *fl)   /* View_Clamp6 0x410a10 */
 {
     if (fl->pitch > 0x270) fl->pitch = 0x270;
     if (fl->pitch < -0x270) fl->pitch = -0x270;
@@ -160,7 +161,160 @@ void fl_control(Freelook *fl, const FreelookInput *in)
     case 3: control3(fl, in); break;
     default: control1(fl, in); break;   /* modes 0/1/4: hub-style rate control */
     }
-    view_clamp(fl);
+    fl_view_clamp(fl);
+}
+
+/* ---- turns (§5.3) ------------------------------------------------------------------ */
+
+static int wrap_half(int d)            /* yaw delta to -1248..1248 */
+{
+    if (d > FL_UNITS / 2) d -= FL_UNITS;
+    if (d < -FL_UNITS / 2) d += FL_UNITS;
+    return d;
+}
+
+void fl_turn_reset(Freelook *fl)
+{
+    fl->turn_n = fl->turn_cnt = 0;
+    fl->auto_on = fl->plan_on = 0;
+}
+
+int fl_turn_begin(Freelook *fl, int ty, int tp, int tr, int frames_left)
+{
+    int n;
+    if (fl->mode == 2 || fl->mode == 3) n = frames_left % 5 + 5;
+    else { n = frames_left % 15; if (n < 5) n += 15; }
+    fl->turn_n = fl->turn_cnt = n;
+    fl->turn_ty = ty; fl->turn_tp = tp; fl->turn_tr = tr;
+    fl->turn_dy = wrap_half(ty - fl->yaw);
+    fl->turn_dp = tp - fl->pitch;
+    /* Mode 1 leaves the roll alone; the 2/3 planner also steers it (to 0x48 x 0.25, L). */
+    fl->turn_dr = fl->mode == 2 || fl->mode == 3 ? tr / 4 - fl->roll : 0;
+    fl->turn_tr = fl->roll + fl->turn_dr;
+    return n;
+}
+
+int fl_turn_step(Freelook *fl)
+{
+    if (fl->turn_cnt <= 0) return 0;
+    fl->turn_cnt--;
+    fl->yaw = fl->turn_ty - fl->turn_dy * fl->turn_cnt / fl->turn_n;
+    fl->pitch = fl->turn_tp - fl->turn_dp * fl->turn_cnt / fl->turn_n;
+    fl->roll = fl->turn_tr - fl->turn_dr * fl->turn_cnt / fl->turn_n;
+    fl_view_clamp(fl);
+    return fl->turn_cnt;
+}
+
+/* Frames the mode-2/3 planner needs for a turn of |d| degrees: an accelerate / decelerate ramp
+ * over the cumulative table {3,6,10,...,78} (1 deg/frame^2), 12 deg/frame cruise beyond it. */
+static int plan_frames(double d)
+{
+    static const int ramp[12] = { 0, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78 };
+    d = fabs(d);
+    for (int i = 0; i < 12; i++) if (2.0 * ramp[i] >= d) return 2 * i;
+    return 22 + (int)ceil((d - 2.0 * 78) / 12.0);
+}
+
+int fl_auto_turn(Freelook *fl, int ty, int tp, int tr, int frames_left)
+{
+    if (fl->mode != 2 && fl->mode != 3) {
+        /* FreeLook_Control1: y = ty - dy * framesLeft / N, N = framesLeft at the first call. */
+        if (!fl->auto_on) {
+            fl->auto_on = 1;
+            fl->auto_ty = ty; fl->auto_tp = tp;
+            fl->auto_dy = wrap_half(ty - fl->yaw);
+            fl->auto_dp = tp - fl->pitch;
+            fl->auto_n = frames_left > 0 ? frames_left : 1;
+        }
+        int f = frames_left < 0 ? 0 : frames_left;
+        fl->yaw = fl->auto_ty - fl->auto_dy * f / fl->auto_n;
+        fl->pitch = fl->auto_tp - fl->auto_dp * f / fl->auto_n;
+        fl_view_clamp(fl);
+        return 1;
+    }
+    /* Planner 0x40f1c0 (approximation): keep free control while there is time, then take
+     * over and ease (smoothstep) from the pose at take-over to the exit pose, arriving on the
+     * segment's last frame. The exit roll is scaled by 0.25 (const 0x420248). */
+    if (!fl->plan_on) {
+        double k = 360.0 / FL_UNITS;
+        double dy = wrap_half(ty - fl->yaw) * k, dp = (tp - fl->pitch) * k;
+        int need = plan_frames(dy), np = plan_frames(dp);
+        if (np > need) need = np;
+        if (frames_left > need) return 0;
+        fl->plan_on = 1;
+        fl->plan_n = frames_left + 1;
+        fl->plan_y0 = fl->yaw; fl->plan_p0 = fl->pitch; fl->plan_r0 = fl->roll;
+        fl->plan_dy = wrap_half(ty - fl->yaw);
+        fl->plan_dp = tp - fl->pitch;
+        fl->plan_dr = tr / 4 - fl->roll;
+    }
+    int f = frames_left < 0 ? 0 : frames_left;
+    double t = (double)(fl->plan_n - f) / fl->plan_n;
+    if (t > 1) t = 1;
+    double e = t * t * (3 - 2 * t);
+    fl->yaw = fl->plan_y0 + (int)lround(fl->plan_dy * e);
+    fl->pitch = fl->plan_p0 + (int)lround(fl->plan_dp * e);
+    fl->roll = fl->plan_r0 + (int)lround(fl->plan_dr * e);
+    fl_view_clamp(fl);
+    return 1;
+}
+
+/* ---- FreeLook_FixupObjects 0x402d30 ---------------------------------------------------- */
+
+static void face_point(int f, double x, double y, double p[3])   /* half-size 256 cube */
+{
+    switch (f) {
+    case 0:  p[0] = x - 256; p[1] = 256 - y; p[2] = 256;     break;
+    case 1:  p[0] = -256;    p[1] = 256 - y; p[2] = x - 256; break;
+    case 2:  p[0] = 256 - x; p[1] = 256 - y; p[2] = -256;    break;
+    case 3:  p[0] = 256;     p[1] = 256 - y; p[2] = 256 - x; break;
+    case 4:  p[0] = x - 256; p[1] = -256;    p[2] = 256 - y; break;
+    default: p[0] = x - 256; p[1] = 256;     p[2] = y - 256; break;
+    }
+}
+
+static void view_matrix(const Freelook *fl, double m[3][3]);
+static double round_half(double v);
+
+void fl_fixup_objects(const Freelook *fl, FgBlock *b)
+{
+    if (!b) return;
+    double m[3][3];
+    view_matrix(fl, m);
+    double k = (FL_W / 2) / tan(fl->half_fov * M_PI / 92160.0);
+    for (int i = 0; i < b->count; i++) {
+        FgRecord *r = &b->rec[i];
+        if (r->kind == OBJ_OVERLAY) continue;
+        int x0 = INT_MAX, y0 = INT_MAX, x1 = INT_MIN, y1 = INT_MIN, vis = 0, ri = 0;
+        for (int f = 0; f < 6 && ri < 3; f++) {
+            if (!(r->face_mask >> f & 1)) continue;
+            const int16_t *rc = r->face_rect[ri++];
+            for (int c = 0; c < 4; c++) {
+                double p[3];
+                face_point(f, rc[(c & 1) ? 2 : 0], rc[(c & 2) ? 3 : 1], p);
+                double vx = p[0] * m[0][0] + p[1] * m[1][0] + p[2] * m[2][0];
+                double vy = p[0] * m[0][1] + p[1] * m[1][1] + p[2] * m[2][1];
+                double vz = p[0] * m[0][2] + p[1] * m[1][2] + p[2] * m[2][2];
+                if (vz < 1.0) continue;
+                int sx = (int)(FL_W / 2 + round_half(vx / vz * k)), sy = (int)(FL_H / 2 + round_half(vy / vz * k));
+                if (sx < x0) x0 = sx;
+                if (sx > x1) x1 = sx;
+                if (sy < y0) y0 = sy;
+                if (sy > y1) y1 = sy;
+                vis = 1;
+            }
+        }
+        if (vis) {
+            if (x0 < 1) x0 = 0;
+            if (x1 > FL_W - 1) x1 = FL_W - 1;
+            if (y0 < 1) y0 = 0;
+            if (y1 > FL_H - 1) y1 = FL_H - 1;
+            if (x0 >= FL_W - 1 || x1 < 1 || y0 >= FL_H - 1 || y1 < 1) vis = 0;
+            if (x0 == 0 && x1 == FL_W - 1 && y0 == 0 && y1 == FL_H - 1) vis = 0;
+        }
+        if (!vis) x0 = y0 = x1 = y1 = 0;
+        r->bbox[0] = (int16_t)x0; r->bbox[1] = (int16_t)y0; r->bbox[2] = (int16_t)x1; r->bbox[3] = (int16_t)y1;
+    }
 }
 
 void fl_script_pose(Freelook *fl, const FreelookScript *s, int i, int ey, int ep, int er)

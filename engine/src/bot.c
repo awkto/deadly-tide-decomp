@@ -6,6 +6,8 @@
  *        has cooled, weapon 3 releases before the 7-shot cap, the semi-auto guns tap.
  *        Launches ACT when at least three targets are on screen. With nothing to shoot the
  *        crosshair drifts back to the centre (crosshair-position branches, e.g. LEVEL11 seg 7).
+ *        In free-look look choices it steers the view onto the window the chain chose (hub: the
+ *        highest unlocked mission; path choices: by --seed) and fires inside it to pick it.
  * --idle: never fires; the crosshair stays centred.
  * --spray: holds fire at the centre (exercises the heat lockout).
  */
@@ -33,6 +35,26 @@ void input_spray(void *ud, const Game *g, const FgBlock *objs, InputState *io)
     io->act = 0;
 }
 
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* Free-look: put the crosshair where the camera's rate control turns the view centre onto
+ * the goal window (mode 1: units/2 per pixel; modes 2/3: 27 / 16 pixels per degree). */
+static void steer(const LookInfo *li, InputState *io)
+{
+    int dy = li->goal_yaw - li->yaw, dp = li->goal_pitch - li->pitch;
+    if (dy > 1248) dy -= 2496;
+    if (dy < -1248) dy += 2496;
+    if (li->mode == 2 || li->mode == 3) {
+        int k = li->mode == 2 ? 27 : 16;
+        double ddy = dy * 360.0 / 2496, ddp = dp * 360.0 / 2496;
+        io->x = clampi(160 + (int)(ddy * k), 0, 319);
+        io->y = clampi(100 - (int)(ddp * k), 0, 199);
+    } else {
+        io->x = clampi(160 + 2 * dy, 0, 319);
+        io->y = clampi(100 - 2 * dp, 0, 199);
+    }
+}
+
 void input_bot(void *ud, const Game *g, const FgBlock *objs, InputState *io)
 {
     static int cooling, tap;
@@ -45,6 +67,14 @@ void input_bot(void *ud, const Game *g, const FgBlock *objs, InputState *io)
         if (t[i].avoid) continue;          /* friendlies: their kill branch restarts the level */
         hostile++;
         if (best < 0 || t[i].dist2 < t[best].dist2) best = i;
+    }
+    /* Look choice (hub mission, path window): once the window is open (or nothing is left to
+     * shoot), turn the view onto the chosen window and press fire inside it. */
+    const LookInfo *li = game_look(g);
+    if (li->active && li->goal >= 0 && !li->turning && (li->choice_open || best < 0)) {
+        steer(li, io);
+        io->buttons = li->goal_inside && li->choice_open ? IN_FIRE : 0;
+        return;
     }
     if (best < 0) {                       /* nothing to shoot: drift back to the screen centre */
         io->buttons = 0;

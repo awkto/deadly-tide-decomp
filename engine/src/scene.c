@@ -186,3 +186,22 @@ int scene_esc(const Scene *sc, int seg)
     if (si->esc == seg) return SCENE_ESC_IGNORE;
     return SCENE_ESC_HUB;
 }
+
+int scene_look_enabled(const Scene *sc, int seg, int i, int hub, int highest)
+{
+    const SegInfo *si = &sc->seg[seg];
+    if (i < 0 || i >= si->hs_count || !(sc->hs[si->hs_first + i].flags & HS_LOOK)) return 0;
+    return !hub || i == 0 || i == 15 || i < highest;
+}
+
+int scene_hotspot_pick(const Scene *sc, int seg, int yaw, int pitch, int hub, int highest)
+{
+    const SegInfo *si = &sc->seg[seg];
+    for (int i = 0; i < si->hs_count; i++) {
+        if (!scene_look_enabled(sc, seg, i, hub, highest)) continue;
+        const Hotspot *h = &sc->hs[si->hs_first + i];
+        int in_yaw = h->x0 < h->x1 ? h->x0 <= yaw && yaw <= h->x1 : h->x0 <= yaw || yaw <= h->x1;
+        if (in_yaw && h->y0 <= pitch && pitch <= h->y1) return i;
+    }
+    return -1;
+}

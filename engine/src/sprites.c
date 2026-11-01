@@ -66,6 +66,9 @@ int fg_parse(const uint8_t *fg, size_t fg_size, FgBlock *blocks, int max_blocks)
             d->x = rd16(r + 0x10); d->y = rd16(r + 0x12); d->w = rd16(r + 0x14); d->h = rd16(r + 0x16);
             for (int k = 0; k < 4; k++) d->bbox[k] = rd16(r + 0x18 + 2 * k);
             for (int k = 0; k < 3; k++) d->pos[k] = (int32_t)rd32(r + 0x20 + 4 * k);
+            d->face_mask = r[0x2c];
+            for (int k = 0; k < 3; k++)
+                for (int j = 0; j < 4; j++) d->face_rect[k][j] = rd16(r + 0x30 + 8 * k + 2 * j);
             d->tint = r[0x48];
             /* Data offset is relative to the block start. */
             if (doff > 0 && dsz > 0 && o + (size_t)doff + (size_t)dsz <= fg_size) {

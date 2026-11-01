@@ -56,6 +56,11 @@ typedef struct {
     /* Mode 2 rate / bank state (0x4212a0 n, 0x421298 ph, 0x42129c k, 0x4287b8 roll0). */
     int       m2_n, m2_ph, m2_k;
     double    m2_roll0;
+    /* Camera turns (§5.3): a confirmed look-pick turn, or the automatic turn to the successor's
+     * exit pose. Angles in engine units (yaw unwrapped deltas). */
+    int       turn_n, turn_cnt, turn_ty, turn_tp, turn_tr, turn_dy, turn_dp, turn_dr;
+    int       auto_on, auto_n, auto_ty, auto_tp, auto_dy, auto_dp;   /* mode 0/1 linear auto-turn */
+    int       plan_on, plan_n, plan_y0, plan_p0, plan_r0, plan_dy, plan_dp, plan_dr; /* mode 2/3 */
     /* Save-under buffer for kind-2 records (Spr_RestoreBackground). */
     uint32_t *save;
     size_t    save_cap;
@@ -74,6 +79,28 @@ void fl_view_set(Freelook *fl, int yaw, int pitch, int roll);
 /* One frame of Player_Update case 6 (modes 1/2/3; auto-turn and pick are not done here),
  * followed by View_Clamp6. */
 void fl_control(Freelook *fl, const FreelookInput *in);
+
+/* View_Clamp6 0x410a10: pitch to +-0x270, yaw wrapped to 0..0x9bf. */
+void fl_view_clamp(Freelook *fl);
+
+/* A confirmed look-pick: turn to the target segment's exit pose (ty, tp, tr = its 0x1c/0x1e/0x48).
+ * Mode 0/1 (FreeLook_Control1 0x40edd0): N = framesLeft % 15, +15 if < 5, linear. Modes 2/3
+ * (planner 0x40f1c0): N = framesLeft % 5 + 5 frames of constant deltas. Returns N. */
+int  fl_turn_begin(Freelook *fl, int ty, int tp, int tr, int frames_left);
+/* One frame of the pick turn. Returns the frames still to go (0 = arrived). */
+int  fl_turn_step(Freelook *fl);
+/* No pick, successor (autoTarget, else next) is not type 6: turn so the camera reaches its exit
+ * pose as the segment ends. Mode 0/1: linear from the first frame (H). Modes 2/3: free control
+ * until the frames left just suffice for an eased turn (approximation of 0x40f1c0, L).
+ * Returns 1 when it drove the camera this frame (skip fl_control). */
+int  fl_auto_turn(Freelook *fl, int ty, int tp, int tr, int frames_left);
+/* Forget turn state (new segment). */
+void fl_turn_reset(Freelook *fl);
+
+/* FreeLook_FixupObjects 0x402d30: project the cube-face rects (+0x2c/+0x30) of every record
+ * (except kind 8) with the current view at 320x200 and store the screen bbox (top-down,
+ * x0,y0,x1,y1; all 0 when off screen) in rec->bbox: the hit / target box of type-6 actors. */
+void fl_fixup_objects(const Freelook *fl, FgBlock *b);
 
 /* Apply a script pose for free-look frame `i` (counted from the segment's first frame);
  * entry pose (ey, ep, er) is the base for pan scripts. */

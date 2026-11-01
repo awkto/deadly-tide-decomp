@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "freelook.h"
+#include "save.h"
 
 #define CHAIN_W 320
 #define CHAIN_H 200
@@ -28,9 +29,12 @@ typedef struct {
     int         one_level;  /* stop when the chain leaves the starting file */
     uint32_t    seed;       /* branch PRNG seed */
     int         verbose;    /* print each segment as it starts (stderr) */
-    int         no_auto_look; /* stand-in until look-picking exists: a segment that would loop
-                               * onto itself (hub, LEVEL02 seg 8 ...) takes its first look-only
-                               * (0x80) hotspot instead. Set to keep looping like the engine. */
+    int         auto_look;  /* headless shortcut (--auto-look): a segment that would loop onto
+                             * itself (hub, LEVEL02 seg 8 ...) takes its first look-only (0x80)
+                             * hotspot. Off by default: the view picks (Hotspot_Pick). */
+    int         hub_between_levels; /* non-original: a finished LEVELnn returns to the hub LEVEL00
+                                     * instead of chaining straight into the next level */
+    SaveData   *save;       /* pilot progress (save.h), may be NULL: no save points, hub lock 1 */
     struct Game *game;      /* combat layer (game.h), may be NULL: then branch conditions see a
                              * 'perfect player' (full health, every listed actor destroyed) */
 } ChainOpts;
@@ -57,6 +61,12 @@ const uint32_t *chain_frame(const Chain *c);   /* CHAIN_W x CHAIN_H XRGB8888 */
 /* ESC (Key_Skip). Returns 0 ignored, 1 jumped (buffered groups dropped: the caller
  * should drop queued audio too), 2 quit requested. */
 int chain_skip(Chain *c);
+
+/* F5 (0x414310): restart the current level from segment 0; on the frontier level SavePoint is
+ * cleared. F2 (0x4143a0): back to the hub LEVEL00 (ignored in the hub). Both rate limited like
+ * ESC. Return 1 when the chain jumped (drop queued audio), else 0. */
+int chain_restart_level(Chain *c);
+int chain_to_hub(Chain *c);
 
 /* Nonzero once after the chain jumped on its own (death / kill branch): groups were dropped,
  * so the caller should drop queued audio too, as after chain_skip. */

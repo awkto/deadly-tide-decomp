@@ -38,7 +38,7 @@ if(NOT DT_PLATFORM_SRC)
 endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
-add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c)
+add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c)
 target_include_directories(dtcore PUBLIC src)
 if(NOT MSVC)
   target_link_libraries(dtcore PUBLIC m)

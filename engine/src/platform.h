@@ -41,4 +41,13 @@ void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan);
 
 void plat_delay_ms(uint32_t ms);
 
+/* Function keys seen by plat_quit_requested(), each reported once: PLAT_KEY_* bits. */
+#define PLAT_KEY_F2 1u
+#define PLAT_KEY_F5 2u
+uint32_t plat_take_keys(void);
+/* Ctrl currently held (the hub's "restart the level" pick modifier). */
+int  plat_ctrl_held(void);
+/* Per-user writable directory for the save file, ending in a path separator ("" if none). */
+const char *plat_user_dir(void);
+
 #endif

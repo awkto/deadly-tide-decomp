@@ -51,6 +51,20 @@ typedef struct {
     int   avoid;             /* killing it branches to a restart clip (type 0, next 0): a friendly */
 } GameTarget;
 
+/* Type-6 view state, published by the scene chain every free-look frame (for the HUD's choice
+ * window and for input sources that steer the camera, e.g. the bot). Angles in engine units. */
+typedef struct {
+    int active;              /* the segment on screen is type 6 */
+    int mode;                /* control sub-mode, segment byte 0x21 */
+    int yaw, pitch;          /* view centre */
+    int on_window;           /* Hotspot_Pick != -1 (choice-window "on target") */
+    int choice_open;         /* look-picks are accepted this frame (g_sceneFrame > seg[0x5c]) */
+    int goal;                /* a look window the bot should take (index), -1 none */
+    int goal_yaw, goal_pitch;/* its window centre */
+    int goal_inside;         /* the view is inside the goal window */
+    int turning;             /* a pick / auto turn drives the camera: input is ignored */
+} LookInfo;
+
 Game *game_new(const GameOpts *o);
 void  game_free(Game *g);
 
@@ -62,6 +76,19 @@ void game_segment_start(Game *g, int seg, const uint8_t *rec);
 void game_frame_pre(Game *g, FgBlock *objs, const uint8_t *hdr);
 /* `frame` = the composited 320x200 XRGB image (NULL / drawn=0 on frames without a picture). */
 void game_frame_post(Game *g, FgBlock *objs, const uint8_t *hdr, uint32_t *frame, int drawn);
+
+/* Type-6 Player_Update (0x410740 case 6) pieces; the chain runs the camera and the pick between
+ * them. poll: Input_Poll (crosshair + buttons). fire: Weapon_Fire, when no pick is pending. */
+const InputState *game_poll_input(Game *g, const FgBlock *objs);
+void game_look_fire(Game *g, FgBlock *objs);
+void game_set_look(Game *g, const LookInfo *li);
+const LookInfo *game_look(const Game *g);
+
+/* Save points (SCENE_GRAPH §3). checkpoint: the resume reset of Play_SceneLoop (gun, health =
+ * 10000, kills = 0, actors re-rolled). ACT charges: get / set. */
+void game_checkpoint(Game *g);
+int  game_act_ammo(const Game *g);
+void game_set_act_ammo(Game *g, int n);
 
 /* g_branchReq: nonzero when a death / kill branch is pending. take() consumes it. */
 int  game_branch_pending(const Game *g);

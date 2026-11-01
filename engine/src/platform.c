@@ -10,6 +10,7 @@ static SDL_Texture     *g_tex;
 static int              g_tex_w, g_tex_h;
 static SDL_AudioStream *g_audio;
 static int              g_skip, g_act;
+static uint32_t         g_keys;
 static int              g_frame_w = 320, g_frame_h = 200;
 static SDL_Joystick    *g_joy;
 
@@ -123,6 +124,8 @@ int plat_quit_requested(void)
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q) quit = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE && !ev.key.repeat) g_skip = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_SPACE && !ev.key.repeat) g_act = 1;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F2 && !ev.key.repeat) g_keys |= PLAT_KEY_F2;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F5 && !ev.key.repeat) g_keys |= PLAT_KEY_F5;
     }
     return quit;
 }
@@ -204,3 +207,22 @@ void plat_sfx_play(const uint8_t *pcm, size_t n, int vol, int pan)
 }
 
 void plat_delay_ms(uint32_t ms) { SDL_Delay(ms); }
+
+uint32_t plat_take_keys(void)
+{
+    uint32_t k = g_keys;
+    g_keys = 0;
+    return k;
+}
+
+int plat_ctrl_held(void) { return (SDL_GetModState() & SDL_KMOD_CTRL) != 0; }
+
+const char *plat_user_dir(void)
+{
+    static char dir[1024];
+    if (!dir[0]) {
+        char *p = SDL_GetPrefPath("DeadlyTide", "deadlytide");
+        if (p) { SDL_strlcpy(dir, p, sizeof dir); SDL_free(p); }
+    }
+    return dir;
+}

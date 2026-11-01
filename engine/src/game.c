@@ -95,6 +95,7 @@ struct Game {
     Streak    streaks[N_STREAKS];
 
     long      frame_no, scene_frame;
+    LookInfo  look;
 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -496,8 +497,10 @@ static void actors_update(Game *g, FgBlock *b)
             if (!fr || !fr->pixels) actor_remove(g, r, c), st = ST_GONE;
             else {
                 if (g->type == SEG_FREELOOK) {
+                    /* On the bbox centre. The fixed-up bbox is top-down screen space while sprites
+                     * are drawn bottom-up, so flip y (the effect is drawn in screen space). */
                     r->x = (int16_t)((r->bbox[0] + r->bbox[2]) / 2 - fr->w / 2);
-                    r->y = (int16_t)((r->bbox[1] + r->bbox[3]) / 2 - fr->h / 2);
+                    r->y = (int16_t)(H - 1 - (r->bbox[1] + r->bbox[3]) / 2 - fr->h / 2);
                 } else {
                     r->x = (int16_t)(r->x + (r->w / 2 - fr->w / 2));
                     r->y = (int16_t)(r->y + (r->h / 2 - fr->h / 2));
@@ -620,7 +623,7 @@ static void hitscan(Game *g, FgBlock *b, int idx, int sx, int sy, int px, int py
         if (g->state[id] < -0x40) sfx_enemy_hit(g, r);
         else {
             kill_actor(g, r, -gp);
-            if (g->o.verbose > 1) fprintf(stderr, "game: frame %ld kill actor %d at %d,%d\n", g->frame_no, id, sx, sy);
+            if (g->o.verbose > 1) fprintf(stderr, "game: %s:%d (type %d) frame %ld kill actor %d at %d,%d\n", g->stem, g->seg, g->type, g->frame_no, id, sx, sy);
         }
         g->shots[idx] = (Shot){ g->aim_x, g->aim_y, 1, 1, id };
         g->st.hits++;
@@ -1105,6 +1108,10 @@ static void hud_draw(Game *g, FgBlock *b, int fire_allowed, uint32_t *dst)
         if (g->health > 10000) g->health = 10000;
     }
     int style = g->rec[0x45];
+    if (choice && g->scene_frame >= choice && g->rec[0x5b]) {     /* choice window */
+        style = g->rec[0x5b];
+        on_target = g->look.on_window;
+    }
     if (!strcmp(g->stem, "LEVEL11")) {
         if (g->seg == 3 || g->seg == 4) { if (g->msg_id == 0) hud_message(g, 5, 0x3c0, 5, 5); }
         else if (g->msg_id == 5) hud_message(g, 0, 0, 0, 0);
@@ -1161,8 +1168,12 @@ void game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, i
     case SEG_RAIL:
         if (flags & 1) { enemy_update(g, b); hud_draw(g, b, (flags & 2) != 0, dst); }
         break;
-    case SEG_PANO: case SEG_FREELOOK:
-        /* Renderer not implemented: no enemy fire or aiming; keep the death check and regen. */
+    case SEG_FREELOOK:
+        enemy_update(g, b);
+        hud_draw(g, b, 1, dst);
+        break;
+    case SEG_PANO:
+        /* Panorama renderer not implemented (no shipped type-2 segment): death check and regen. */
         hud_draw(g, NULL, 0, NULL);
         break;
     default:
@@ -1186,6 +1197,27 @@ void game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, i
     }
     g->frame_no++; g->scene_frame++;
 }
+
+/* ---- type 6 / save points ------------------------------------------------------------------ */
+
+const InputState *game_poll_input(Game *g, const FgBlock *b)
+{
+    input_poll(g, b);
+    return &g->in;
+}
+
+void game_look_fire(Game *g, FgBlock *b)
+{
+    if (!g->loaded || !g->have_seg) return;
+    weapon_fire(g, b);
+}
+
+void game_set_look(Game *g, const LookInfo *li) { g->look = *li; }
+const LookInfo *game_look(const Game *g) { return &g->look; }
+
+void game_checkpoint(Game *g) { if (g->loaded) reset_for_scene(g); }
+int  game_act_ammo(const Game *g) { return g->act_ammo; }
+void game_set_act_ammo(Game *g, int n) { g->act_ammo = n; g->ammo_frame = n + 5 < 6 ? 0 : n + 5; }
 
 /* ---- queries ------------------------------------------------------------------------------- */
 

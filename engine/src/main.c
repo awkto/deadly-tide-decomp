@@ -163,6 +163,8 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
 }
 
 /* One iteration of the player. Returns nonzero when playback is over. */
+static unsigned g_presented;   /* video frames handed to plat_present (dt_frames() on the web) */
+
 static int play_tick(Player *p)
 {
     Chain *c = p->c;
@@ -211,7 +213,7 @@ static int play_tick(Player *p)
         if (!p->pace) break;
         if (chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; break; }
     }
-    if (shown) plat_present(chain_frame(c), CHAIN_W, CHAIN_H);
+    if (shown) { plat_present(chain_frame(c), CHAIN_W, CHAIN_H); g_presented++; }
     return p->rc != 0;
 }
 

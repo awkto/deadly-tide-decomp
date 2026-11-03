@@ -51,6 +51,9 @@ static int web_l96_open(const char *path, L96Reader *out)
 }
 
 EMSCRIPTEN_KEEPALIVE
+unsigned dt_frames(void) { return g_presented; }
+
+EMSCRIPTEN_KEEPALIVE
 int dt_segment_count(const char *path)
 {
     l96_set_open_fn(web_l96_open);

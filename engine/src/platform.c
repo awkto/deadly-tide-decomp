@@ -56,6 +56,7 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
     }
     /* Integer-scaled nearest-neighbour presentation of the logical frame. */
     SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_HideCursor();   /* the game draws its own crosshair; the original hides the OS cursor */
 
     /* One logical device with two bound streams: the video soundtrack (U8 stereo) and the SFX
      * mixer (S16 stereo). A device opened by SDL_OpenAudioDeviceStream refuses extra bindings. */

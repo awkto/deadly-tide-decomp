@@ -35,7 +35,7 @@
 const $ = id => document.getElementById(id);
 const logEl = $('log');
 const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; };
-let runtimeReady = false, playing = false;
+let runtimeReady = false, playing = false, segBusy = false;
 const loaded = {};   // name -> true (registered)
 
 var Module = {
@@ -59,8 +59,10 @@ async function addFiles(list) {
   if (Object.keys(loaded).length) { $('play').disabled = false; await refreshSegs(); }
 }
 async function refreshSegs() {
-  if (!runtimeReady) return;
-  const n = Module.ccall('dt_segment_count', 'number', ['string'], [$('file').value]);
+  if (!runtimeReady || playing || segBusy) return;   // Asyncify allows one async call at a time
+  segBusy = true;
+  // async: opening the file reads its header through the lazy (Asyncify) reader
+  const n = await Module.ccall('dt_segment_count', 'number', ['string'], [$('file').value], { async: true }).finally(() => { segBusy = false; });
   $('seg').innerHTML = '';
   for (let i = 0; i < Math.max(n, 0); i++) { const o = document.createElement('option'); o.value = o.textContent = i; $('seg').appendChild(o); }
   if (n < 0) log('not a valid L96 file');
@@ -79,7 +81,7 @@ drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
 $('canvas').addEventListener('click', () => $('canvas').focus());
 $('play').onclick = () => {   // user gesture: lets the browser start audio
-  if (playing || !runtimeReady) return;
+  if (playing || segBusy || !runtimeReady) return;
   const mode = +$('mode').value;
   const level = mode === 0 ? $('file').value : 'LOGOS';
   const seg = mode === 0 ? +$('seg').value : 0;

@@ -35,11 +35,11 @@
 const $ = id => document.getElementById(id);
 const logEl = $('log');
 const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; };
-const MAX_MEMFS = 250 * 1024 * 1024;
 let runtimeReady = false, playing = false;
-const loaded = {};   // name -> true (written to MEMFS)
+const loaded = {};   // name -> true (registered)
 
 var Module = {
+  l96Files: {},
   canvas: $('canvas'),
   print: t => log(t),
   printErr: t => { console.warn(t); log('[err] ' + t); },   // surfaces engine stderr (e.g. missing .L96)
@@ -52,12 +52,7 @@ async function addFiles(list) {
   for (const f of list) {
     const name = f.name.toUpperCase();
     if (!name.endsWith('.L96')) { log('skipping ' + f.name); continue; }
-    if (f.size > MAX_MEMFS) { log(f.name + ' is ' + (f.size>>20) + ' MB: too large for the in-memory build'); continue; }
-    // TODO: lazy reads (WORKERFS in a worker) so large files need no RAM copy.
-    const buf = new Uint8Array(await f.arrayBuffer());
-    const FS = Module.FS;
-    try { FS.unlink('/' + name); } catch (e) {}
-    FS.writeFile('/' + name, buf);
+    Module.l96Files[name] = f;   // read lazily via File.slice(); no copy
     if (!loaded[name]) { loaded[name] = true; const o = document.createElement('option'); o.value = o.textContent = name; $('file').appendChild(o); }
     log('loaded ' + name + ' (' + (f.size >> 10) + ' KB)');
   }
@@ -65,7 +60,7 @@ async function addFiles(list) {
 }
 async function refreshSegs() {
   if (!runtimeReady) return;
-  const n = Module.ccall('dt_segment_count', 'number', ['string'], ['/' + $('file').value]);
+  const n = Module.ccall('dt_segment_count', 'number', ['string'], [$('file').value]);
   $('seg').innerHTML = '';
   for (let i = 0; i < Math.max(n, 0); i++) { const o = document.createElement('option'); o.value = o.textContent = i; $('seg').appendChild(o); }
   if (n < 0) log('not a valid L96 file');
@@ -88,10 +83,11 @@ $('play').onclick = () => {   // user gesture: lets the browser start audio
   const mode = +$('mode').value;
   const level = mode === 0 ? $('file').value : 'LOGOS';
   const seg = mode === 0 ? +$('seg').value : 0;
-  const rc = Module.ccall('dt_start', 'number', ['string', 'number', 'number', 'number'],
-                          [level, seg, +$('difficulty').value, mode]);
-  if (rc === 0) { playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; $('canvas').focus(); }
-  else log('dt_start failed: ' + rc);
+  playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; $('canvas').focus();
+  Module.ccall('dt_start', 'number', ['string', 'number', 'number', 'number'],
+               [level, seg, +$('difficulty').value, mode], { async: true }).then(rc => {
+    if (rc < 0) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('dt_start failed: ' + rc); }
+  });
 };
 // While the game runs keep F5 (reload), F2 and Space (page scroll) for the engine. The engine
 // uses the absolute mouse position over the canvas, so no pointer lock is wanted.

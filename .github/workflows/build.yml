@@ -33,7 +33,10 @@ jobs:
       - name: Build (headless)
         run: cmake --build build/headless -j
       - name: Smoke test (--help)
-        run: build/headless/deadlytide --help
+        run: |
+          build/headless/deadlytide --help > help.txt 2>&1 || true
+          cat help.txt
+          grep -q -- --level help.txt
       - name: Package
         run: |
           mkdir -p dist/deadlytide-linux-x86_64

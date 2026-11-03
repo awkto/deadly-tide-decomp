@@ -11,6 +11,7 @@ Tested on Ubuntu 24.04, Wine 9, headless (Xvfb). What it takes:
 3. **Native Cinepak codec is required:** copy the `ICCVID.DLL` from CD1 to `system32`, set the DLL override
    `iccvid=native` and `Drivers32\vidc.cvid=iccvid.dll`. The engine pokes into the codec's instance
    data, so Wine's builtin `iccvid` crashes it (null read at 0x417780 in DTPLAYER).
+   Copy it **after** `wineboot`/`regedit`: those can put the builtin back in `system32`.
 4. An audio device must exist (timing runs off DirectSound): headless, a PulseAudio `module-null-sink` works.
 5. Run `DT.EXE` inside `wine explorer /desktop=DT,640x480`; click START. The engine switches to 320x240.
 

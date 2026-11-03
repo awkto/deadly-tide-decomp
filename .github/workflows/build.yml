@@ -10,9 +10,6 @@ on:
 permissions:
   contents: read
 
-env:
-  SDL_CACHE_KEY: sdl3-release-3.2.30
-
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -27,11 +24,6 @@ jobs:
             libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
             libdecor-0-dev libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
-      - name: Cache SDL3 sources
-        uses: actions/cache@v4
-        with:
-          path: build/native/_deps
-          key: ${{ env.SDL_CACHE_KEY }}-linux-${{ hashFiles('engine/CMakeLists.txt') }}
       - name: Configure (SDL, Release)
         run: cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -59,11 +51,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Cache SDL3 sources
-        uses: actions/cache@v4
-        with:
-          path: build/native/_deps
-          key: ${{ env.SDL_CACHE_KEY }}-windows-${{ hashFiles('engine/CMakeLists.txt') }}
       - name: Configure (MSVC)
         run: cmake -S engine -B build/native
       - name: Build (Release)
@@ -82,11 +69,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache SDL3 sources
-        uses: actions/cache@v4
-        with:
-          path: build/native/_deps
-          key: ${{ env.SDL_CACHE_KEY }}-macos-${{ hashFiles('engine/CMakeLists.txt') }}
       - name: Configure
         run: cmake -S engine -B build/native -DCMAKE_BUILD_TYPE=Release
       - name: Build

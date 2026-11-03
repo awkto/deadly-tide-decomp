@@ -7,18 +7,29 @@
  body{background:#111;color:#ccc;font:14px system-ui,sans-serif;margin:0;padding:16px;text-align:center}
  #drop{border:2px dashed #666;padding:16px;margin:0 auto 12px;max-width:640px}
  #drop.over{border-color:#6cf}
- canvas{display:block;margin:12px auto;width:640px;max-width:100%;aspect-ratio:8/5;background:#000;image-rendering:pixelated;image-rendering:crisp-edges}
+ label{margin:0 6px}
+ canvas{display:block;margin:12px auto;width:640px;max-width:100%;aspect-ratio:8/5;background:#000;image-rendering:pixelated;image-rendering:crisp-edges;outline:none}
  #log{font:12px monospace;color:#999;white-space:pre-wrap;max-width:640px;margin:0 auto;text-align:left}
 </style></head><body>
 <h2>Deadly Tide (1996) - web player</h2>
 <p>Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96). Nothing is uploaded; files stay in your browser.</p>
 <div id="drop">
  <input id="files" type="file" multiple accept=".l96,.L96"> or drop files here<br><br>
- File: <select id="file"></select>
- Segment: <select id="seg"></select>
+ <label>Start: <select id="mode">
+   <option value="0">Level from segment</option>
+   <option value="1">Full game (from LOGOS)</option>
+   <option value="2">Demo (attract)</option>
+ </select></label>
+ <label>Difficulty: <select id="difficulty">
+   <option value="0">Easy</option>
+   <option value="1" selected>Normal</option>
+   <option value="2">Hard</option>
+ </select></label><br><br>
+ <label>File: <select id="file"></select></label>
+ <label>Segment: <select id="seg"></select></label>
  <button id="play" disabled>Play</button>
 </div>
-<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
 <div id="log"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -31,7 +42,7 @@ const loaded = {};   // name -> true (written to MEMFS)
 var Module = {
   canvas: $('canvas'),
   print: t => log(t),
-  printErr: t => { console.warn(t); log('[err] ' + t); },
+  printErr: t => { console.warn(t); log('[err] ' + t); },   // surfaces engine stderr (e.g. missing .L96)
   onRuntimeInitialized() { runtimeReady = true; log('engine ready'); },
   onPlayerDone(rc) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('segment finished, rc=' + rc); },
 };
@@ -59,18 +70,35 @@ async function refreshSegs() {
   for (let i = 0; i < Math.max(n, 0); i++) { const o = document.createElement('option'); o.value = o.textContent = i; $('seg').appendChild(o); }
   if (n < 0) log('not a valid L96 file');
 }
+function syncMode() {
+  const fromLevel = $('mode').value === '0';
+  $('file').disabled = $('seg').disabled = !fromLevel;
+}
 $('files').onchange = e => addFiles(e.target.files);
 $('file').onchange = refreshSegs;
+$('mode').onchange = syncMode;
+syncMode();
 const drop = $('drop');
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+$('canvas').addEventListener('click', () => $('canvas').focus());
 $('play').onclick = () => {   // user gesture: lets the browser start audio
   if (playing || !runtimeReady) return;
-  const rc = Module.ccall('dt_start', 'number', ['string', 'number', 'number', 'number'], [$('file').value, +$('seg').value, 2, 0]);
-  if (rc === 0) { playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; }
+  const mode = +$('mode').value;
+  const level = mode === 0 ? $('file').value : 'LOGOS';
+  const seg = mode === 0 ? +$('seg').value : 0;
+  const rc = Module.ccall('dt_start', 'number', ['string', 'number', 'number', 'number'],
+                          [level, seg, +$('difficulty').value, mode]);
+  if (rc === 0) { playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; $('canvas').focus(); }
   else log('dt_start failed: ' + rc);
 };
+// While the game runs keep F5 (reload), F2 and Space (page scroll) for the engine. The engine
+// uses the absolute mouse position over the canvas, so no pointer lock is wanted.
+window.addEventListener('keydown', e => {
+  if (!playing) return;
+  if (e.key === 'F5' || e.key === 'F2' || e.key === ' ' || e.key === 'Spacebar') e.preventDefault();
+}, { capture: true });
 </script>
 <script src="deadlytide.js"></script>
 </body></html>

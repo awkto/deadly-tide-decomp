@@ -50,6 +50,7 @@ target_link_libraries(deadlytide PRIVATE dtcore ${DT_SDL_TARGET})
 
 if(MSVC)
   set(DT_WARN /W4)
+  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)   # fopen etc. are fine; the _s variants are not C11-portable
 else()
   set(DT_WARN -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
 endif()

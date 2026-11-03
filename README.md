@@ -42,6 +42,12 @@ With emsdk: `emcmake cmake -S engine -B build/wasm && cmake --build build/wasm`,
 over HTTP, open `index.html`, pick your `.L96` files (all of them, for the full game), choose a start mode
 and difficulty, press Play.
 
+## Prebuilt binaries / CI
+GitHub Actions (`.github/workflows/build.yml`) builds Linux, Windows (MSVC), macOS and the browser (WebAssembly)
+version on every push to `main` and every pull request; each run uploads one zip per platform as a workflow artifact.
+Pushing a `v*` tag publishes those zips as a GitHub release. The binaries contain the engine only: you still need
+your own game files (see "Game files").
+
 ## Docs
 | File | Contents |
 |---|---|

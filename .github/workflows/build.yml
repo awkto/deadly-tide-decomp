@@ -1,0 +1,147 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SDL_CACHE_KEY: sdl3-release-3.2.30
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev \
+            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
+      - name: Cache SDL3 sources
+        uses: actions/cache@v4
+        with:
+          path: build/native/_deps
+          key: ${{ env.SDL_CACHE_KEY }}-linux-${{ hashFiles('engine/CMakeLists.txt') }}
+      - name: Configure (SDL, Release)
+        run: cmake -S engine -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/native -j
+      - name: Configure (headless)
+        run: cmake -S engine -B build/headless -G Ninja -DDT_HEADLESS=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build (headless)
+        run: cmake --build build/headless -j
+      - name: Smoke test (--help)
+        run: build/headless/deadlytide --help
+      - name: Package
+        run: |
+          mkdir -p dist/deadlytide-linux-x86_64
+          cp build/native/deadlytide README.md dist/deadlytide-linux-x86_64/
+          cd dist && cmake -E tar cf deadlytide-linux-x86_64.zip --format=zip deadlytide-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadlytide-linux-x86_64
+          path: dist/deadlytide-linux-x86_64.zip
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SDL3 sources
+        uses: actions/cache@v4
+        with:
+          path: build/native/_deps
+          key: ${{ env.SDL_CACHE_KEY }}-windows-${{ hashFiles('engine/CMakeLists.txt') }}
+      - name: Configure (MSVC)
+        run: cmake -S engine -B build/native
+      - name: Build (Release)
+        run: cmake --build build/native --config Release --parallel
+      - name: Package
+        run: |
+          mkdir -p dist/deadlytide-windows-x86_64
+          cp build/native/Release/deadlytide.exe README.md dist/deadlytide-windows-x86_64/
+          cd dist && cmake -E tar cf deadlytide-windows-x86_64.zip --format=zip deadlytide-windows-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadlytide-windows-x86_64
+          path: dist/deadlytide-windows-x86_64.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SDL3 sources
+        uses: actions/cache@v4
+        with:
+          path: build/native/_deps
+          key: ${{ env.SDL_CACHE_KEY }}-macos-${{ hashFiles('engine/CMakeLists.txt') }}
+      - name: Configure
+        run: cmake -S engine -B build/native -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/native -j 4
+      - name: Package
+        run: |
+          mkdir -p dist/deadlytide-macos
+          cp build/native/deadlytide README.md dist/deadlytide-macos/
+          cd dist && cmake -E tar cf deadlytide-macos.zip --format=zip deadlytide-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadlytide-macos
+          path: dist/deadlytide-macos.zip
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+      - name: Configure
+        run: emcmake cmake -S engine -B build/wasm
+      - name: Build
+        run: cmake --build build/wasm -j
+      - name: Check outputs
+        run: |
+          ls -l build/wasm
+          test -s build/wasm/deadlytide.wasm
+          test -s build/wasm/deadlytide.js
+          test -s build/wasm/index.html
+      - name: Package
+        run: |
+          mkdir -p dist/deadlytide-web
+          cp build/wasm/index.html build/wasm/deadlytide.js build/wasm/deadlytide.wasm README.md dist/deadlytide-web/
+          cd dist && cmake -E tar cf deadlytide-web.zip --format=zip deadlytide-web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadlytide-web
+          path: dist/deadlytide-web.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos, wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - run: ls -l artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true

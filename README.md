@@ -14,8 +14,8 @@ runs natively and in the browser (WebAssembly).
 - File formats, scene graph, gameplay data, combat and free-look renderer: documented in `docs/`.
 - Engine: plays the whole game — video + audio, branching scene graph, enemies, weapons with heat,
   health/death, HUD, SFX, free-look 3D scenes, the mission-select globe, save points.
-  Verified headless (a bot completes the game); needs real-mouse play testing.
-- Browser build: works with files you select locally; large levels still load fully into memory.
+  Verified headless (a bot completes the game) and with scripted mouse/keyboard input in a window and the browser.
+- Browser build: works with files you select locally; they are read lazily (never uploaded or copied into memory).
 
 See [PLAN.md](PLAN.md) for details and next steps.
 
@@ -39,7 +39,8 @@ and combat stats) or `--dump-frames OUT --every 15`.
 
 ## Build (browser)
 With emsdk: `emcmake cmake -S engine -B build/wasm && cmake --build build/wasm`, serve `build/wasm/`
-over HTTP, open `index.html`, pick your `.L96` files, press Play.
+over HTTP, open `index.html`, pick your `.L96` files (all of them, for the full game), choose a start mode
+and difficulty, press Play.
 
 ## Docs
 | File | Contents |

@@ -2,7 +2,7 @@
 
 Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 
-## Status (2026-11-01)
+## Status (2026-11-04)
 
 | # | Step | State |
 |---|------|-------|
@@ -10,14 +10,13 @@ Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 | 2 | Asset dump | **done** — all 29 files, 413 segments, ~92 min video; private copy in `dump/`; CD4 music as FLAC |
 | 3 | Decompile `DTPLAYER.EXE` | done for everything the port needs: `docs/ENGINE_MAP.md`, `SCENE_GRAPH.md`, `GAMEPLAY_DATA.md`, `COMBAT_SPEC.md`, `FREELOOK_SPEC.md` |
 | 4 | Original under Wine | **works** — see `tools/wine/README.md`; first reference recording taken |
-| 5 | C + SDL3 engine | feature-complete in headless tests: combat, free-look 3D, hub mission select, saves; bot finishes the whole game. Needs a real-mouse play test |
-| 6 | WASM build | works in Chrome with user-supplied files (MEMFS); todo lazy file access |
+| 5 | C + SDL3 engine | feature-complete: combat, free-look 3D, hub mission select, saves, demo mode; bot finishes the whole game; windowed mouse/keyboard play tested under Xvfb + xdotool |
+| 6 | WASM build | works in Chrome: lazy File.slice reads (Asyncify, 64MB heap for any level), level/full/demo start, difficulty, mouse combat, 15 fps |
 
 ## Next
-1. Windowed play test with a real mouse (needs a display: DO droplet + Xvfb/xdotool, or the user).
-2. Web: lazy file reads (Asyncify/WORKERFS) for 100–220MB levels, mouse input + pointer lock, audio check.
-3. Demo/attract mode, LOGOS-first start; free-look enemy shot streaks.
-4. Compare against the Wine reference rig side by side (timings, damage feel).
+1. Compare against the Wine reference rig side by side (HUD, palette, timings, damage feel) and fix differences.
+2. Web: AudioWorklet instead of the deprecated ScriptProcessorNode (SDL), mobile/touch input, a hosted page (code only, user supplies files).
+3. Free-look enemy shot streaks; real-user play testing for difficulty balance.
 
 ## What the game actually is
 

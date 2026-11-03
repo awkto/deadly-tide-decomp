@@ -10,10 +10,51 @@
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
-static int read_at(FILE *fp, int64_t off, void *dst, size_t n)
+static int stdio_read_at(void *ctx, uint64_t off, void *dst, size_t n)
 {
+    FILE *fp = ctx;
     if (fseek(fp, (long)off, SEEK_SET) != 0) return -1;
     return fread(dst, 1, n, fp) == n ? 0 : -1;
+}
+
+static uint64_t stdio_size(void *ctx)
+{
+    FILE *fp = ctx;
+    if (fseek(fp, 0, SEEK_END) != 0) return 0;
+    long n = ftell(fp);
+    return n < 0 ? 0 : (uint64_t)n;
+}
+
+static void stdio_close(void *ctx) { fclose(ctx); }
+
+static int stdio_open(const char *path, L96Reader *out)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return -1;
+    out->ctx = fp; out->read_at = stdio_read_at; out->size = stdio_size; out->close = stdio_close;
+    return 0;
+}
+
+static L96OpenFn g_open = stdio_open;
+
+void l96_set_open_fn(L96OpenFn fn) { g_open = fn ? fn : stdio_open; }
+
+int l96_exists(const char *path)
+{
+    L96Reader r;
+    if (g_open(path, &r) != 0) return 0;
+    if (r.close) r.close(r.ctx);
+    return 1;
+}
+
+int l96_read(const L96File *f, uint64_t off, void *dst, size_t n)
+{
+    return f->rd.read_at(f->rd.ctx, off, dst, n);
+}
+
+static int read_at(const L96Reader *r, int64_t off, void *dst, size_t n)
+{
+    return r->read_at(r->ctx, (uint64_t)off, dst, n);
 }
 
 static size_t entry_bytes(const uint8_t *e)
@@ -47,11 +88,10 @@ static int layout_segment(const L96File *f, L96Segment *sg)
 int l96_open(L96File *f, const char *path)
 {
     memset(f, 0, sizeof *f);
-    f->fp = fopen(path, "rb");
-    if (!f->fp) { fprintf(stderr, "l96: cannot open %s\n", path); return -1; }
+    if (g_open(path, &f->rd) != 0) { fprintf(stderr, "l96: cannot open %s\n", path); return -1; }
 
     uint8_t h[0x94];
-    if (read_at(f->fp, 0, h, sizeof h) != 0 || memcmp(h, "L96\0", 4) != 0) {
+    if (read_at(&f->rd, 0, h, sizeof h) != 0 || memcmp(h, "L96\0", 4) != 0) {
         fprintf(stderr, "l96: %s: not an L96 file\n", path); goto fail;
     }
     memcpy(f->name, h + 4, 8);
@@ -70,15 +110,15 @@ int l96_open(L96File *f, const char *path)
     if (!f->names || !f->index || !f->segments) goto fail;
 
     for (uint32_t i = 0; i < f->n_names; i++) {
-        if (read_at(f->fp, (int64_t)off_names + 8 * i, f->names[i], 8) != 0) goto fail;
+        if (read_at(&f->rd, (int64_t)off_names + 8 * i, f->names[i], 8) != 0) goto fail;
         f->names[i][8] = 0;
     }
-    if (read_at(f->fp, off_pal, f->palette, sizeof f->palette) != 0) goto fail;
-    if (read_at(f->fp, off_index, f->index, (size_t)f->n_index * 8) != 0) goto fail;
+    if (read_at(&f->rd, off_pal, f->palette, sizeof f->palette) != 0) goto fail;
+    if (read_at(&f->rd, off_index, f->index, (size_t)f->n_index * 8) != 0) goto fail;
 
     for (uint32_t s = 0; s < f->n_segments; s++) {
         L96Segment *sg = &f->segments[s];
-        if (read_at(f->fp, (int64_t)off_segs + (int64_t)L96_SEGMENT_RECORD * s, sg->raw, sizeof sg->raw) != 0)
+        if (read_at(&f->rd, (int64_t)off_segs + (int64_t)L96_SEGMENT_RECORD * s, sg->raw, sizeof sg->raw) != 0)
             goto fail;
         sg->type   = (int32_t)rd32(sg->raw);
         sg->flag   = (int32_t)rd32(sg->raw + 4);
@@ -101,7 +141,7 @@ void l96_close(L96File *f)
 {
     if (f->segments) for (uint32_t s = 0; s < f->n_segments; s++) free(f->segments[s].where);
     free(f->segments); free(f->index); free(f->names);
-    if (f->fp) fclose(f->fp);
+    if (f->rd.close) f->rd.close(f->rd.ctx);
     memset(f, 0, sizeof *f);
 }
 
@@ -148,7 +188,7 @@ int l96_read_group(const L96File *f, int s, int k, L96Group *g)
     if (sg->where[k] >= 0) {
         g->size = entry_bytes(e);
         g->raw = malloc(g->size ? g->size : 1);
-        if (!g->raw || read_at(f->fp, sg->where[k], g->raw, g->size) != 0) {
+        if (!g->raw || read_at(&f->rd, sg->where[k], g->raw, g->size) != 0) {
             fprintf(stderr, "l96: short read for segment %d group %d\n", s, k);
             l96_group_free(g); return -1;
         }

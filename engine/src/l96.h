@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stddef.h>
 
 #define L96_SECTOR          0x800u
 #define L96_SEGMENT_RECORD  100u
@@ -31,8 +32,18 @@ typedef struct {
     int64_t *where;     /* per-group file offset, -1 for a virtual group */
 } L96Segment;
 
+/* Random-access byte source. Default is stdio; a web build can install a lazy one. */
+typedef struct L96Reader {
+    void *ctx;
+    int  (*read_at)(void *ctx, uint64_t off, void *buf, size_t n);  /* 0 = ok, full read */
+    uint64_t (*size)(void *ctx);
+    void (*close)(void *ctx);
+} L96Reader;
+typedef int (*L96OpenFn)(const char *path, L96Reader *out);  /* 0 = ok */
+void l96_set_open_fn(L96OpenFn fn);   /* NULL restores the stdio default */
+
 typedef struct {
-    FILE       *fp;
+    L96Reader   rd;
     char        name[9];
     uint32_t    version;
     uint32_t    n_names, n_segments, n_index;
@@ -64,6 +75,10 @@ typedef struct {
 
 /* Returns 0 on success, -1 on failure (message on stderr). */
 int  l96_open(L96File *f, const char *path);
+/* 1 if path can be opened through the current open function (no message on failure). */
+int  l96_exists(const char *path);
+/* Read n bytes at off from the file's reader. 0 on success. */
+int  l96_read(const L96File *f, uint64_t off, void *buf, size_t n);
 void l96_close(L96File *f);
 
 /* Read group k of segment s. Free with l96_group_free. 0 on success. */

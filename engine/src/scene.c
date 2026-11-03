@@ -12,7 +12,7 @@ int scene_load(Scene *sc, const L96File *f)
 {
     memset(sc, 0, sizeof *sc);
     uint8_t h[0x94];
-    if (fseek(f->fp, 0, SEEK_SET) != 0 || fread(h, 1, sizeof h, f->fp) != sizeof h) return -1;
+    if (l96_read(f, 0, h, sizeof h) != 0) return -1;
     uint32_t n_hs = rd32(h + 0x30), off_hs = rd32(h + 0x60);
 
     sc->n_segments = (int)f->n_segments;
@@ -39,8 +39,7 @@ int scene_load(Scene *sc, const L96File *f)
     }
     for (uint32_t i = 0; i < n_hs; i++) {
         uint8_t r[SCENE_HS_REC];
-        if (fseek(f->fp, (long)(off_hs + SCENE_HS_REC * i), SEEK_SET) != 0 ||
-            fread(r, 1, sizeof r, f->fp) != sizeof r) { scene_free(sc); return -1; }
+        if (l96_read(f, off_hs + SCENE_HS_REC * i, r, sizeof r) != 0) { scene_free(sc); return -1; }
         Hotspot *hp = &sc->hs[i];
         hp->target = (int32_t)rd32(r);
         hp->flags  = rd32(r + 4);

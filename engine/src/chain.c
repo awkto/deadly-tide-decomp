@@ -96,9 +96,7 @@ static int open_level(Chain *c, const char *stem)
     const char *dirs[] = { "", "cd1/", "cd2/", "cd3/", "cd4/", "CD1/", "CD2/", "CD3/", "CD4/" };
     for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) {
         snprintf(path, sizeof path, "%s/%s%s.L96", c->o.data_dir, dirs[i], stem);
-        FILE *t = fopen(path, "rb");
-        if (!t) continue;
-        fclose(t);
+        if (!l96_exists(path)) continue;
         if (l96_open(&c->f, path) != 0) return -1;
         if (scene_load(&c->sc, &c->f) != 0 || sprites_load(&c->spr, &c->f) != 0) {
             fprintf(stderr, "chain: cannot load tables of %s\n", path);

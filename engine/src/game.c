@@ -140,22 +140,23 @@ void game_free(Game *g)
     free(g);
 }
 
-static int read_at(FILE *fp, uint32_t off, void *dst, size_t n)
+static int read_at(const L96File *f, uint64_t off, void *dst, size_t n)
 {
-    if (fseek(fp, (long)off, SEEK_SET) != 0) return -1;
-    return fread(dst, 1, n, fp) == n ? 0 : -1;
+    return l96_read(f, off, dst, n);
 }
 
-static int load_sets(Game *g, FILE *fp, uint32_t off, uint32_t n)
+static int load_sets(Game *g, const L96File *f, uint32_t off, uint32_t n)
 {
-    if (fseek(fp, (long)off, SEEK_SET) != 0) return -1;
+    uint64_t pos = off;
     for (uint32_t i = 0; i < n; i++) {
         uint8_t h[16];
-        if (fread(h, 1, 16, fp) != 16) return -1;
+        if (read_at(f, pos, h, 16) != 0) return -1;
+        pos += 16;
         uint32_t count = rd32(h + 4), size = rd32(h + 8);
         int type = rd16(h + 12), hint = rd16(h + 14);
         uint8_t *data = malloc(size ? size : 1);
-        if (!data || fread(data, 1, size, fp) != size) { free(data); return -1; }
+        if (!data || read_at(f, pos, data, size) != 0) { free(data); return -1; }
+        pos += size;
         int list = type < 0 ? -type : type;
         if (list >= N_LISTS || g->n_list[list] >= LIST_MAX || count > SET_FRAMES ||
             (size_t)count * FG_REC_SIZE > size) { free(data); continue; }
@@ -190,7 +191,7 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
     g->have_seg = 0;
     memcpy(g->stem, f->name, 8); g->stem[8] = 0;
     uint8_t h[0x94];
-    if (read_at(f->fp, 0, h, sizeof h) != 0) return -1;
+    if (read_at(f, 0, h, sizeof h) != 0) return -1;
     uint32_t n_snd = rd32(h + 0x1c), n_spr = rd32(h + 0x20), flag24 = rd32(h + 0x24);
     uint32_t n54 = rd32(h + 0x34), n28 = rd32(h + 0x38);
     g->act_start = h[0x88];
@@ -202,8 +203,8 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
     g->prev  = calloc(n28 ? n28 : 1, sizeof *g->prev);
     g->dist2 = calloc(n28 ? n28 : 1, sizeof *g->dist2);
     if (!g->cls || !g->act || !g->state || !g->expl || !g->prev || !g->dist2) return -1;
-    if ((n54 && read_at(f->fp, rd32(h + 0x64), g->cls, (size_t)n54 * CLS_SIZE) != 0) ||
-        (n28 && read_at(f->fp, rd32(h + 0x68), g->act, (size_t)n28 * ACT_SIZE) != 0)) return -1;
+    if ((n54 && read_at(f, rd32(h + 0x64), g->cls, (size_t)n54 * CLS_SIZE) != 0) ||
+        (n28 && read_at(f, rd32(h + 0x68), g->act, (size_t)n28 * ACT_SIZE) != 0)) return -1;
     if (flag24 == 0 && n54 != 0)       /* Level_Load rewrite: byte2 = byte0, byte0 -= n54/2, byte1 = byte0 */
         for (uint32_t i = 0; i < n28; i++) {
             uint8_t *a = g->act + ACT_SIZE * i;
@@ -228,7 +229,7 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
         if (!sizes) return -1;
         for (uint32_t i = 0; i < n_snd; i++) {
             uint8_t sh[0x2c];
-            if (read_at(f->fp, off + total, sh, sizeof sh) != 0) { free(sizes); return -1; }
+            if (read_at(f, off + total, sh, sizeof sh) != 0) { free(sizes); return -1; }
             sizes[i] = rd32(sh + 8);
             total += 0x2c + sizes[i];
             cap += sizes[i];
@@ -237,14 +238,14 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
         if (!g->snd_data) { free(sizes); return -1; }
         size_t at = 0; uint32_t pos = off;
         for (uint32_t i = 0; i < n_snd; i++) {
-            if (read_at(f->fp, pos + 0x2c, g->snd_data + at, sizes[i]) != 0) { free(sizes); return -1; }
+            if (read_at(f, pos + 0x2c, g->snd_data + at, sizes[i]) != 0) { free(sizes); return -1; }
             g->snd[i].pcm = g->snd_data + at; g->snd[i].n = sizes[i];
             at += sizes[i]; pos += 0x2c + sizes[i];
         }
         free(sizes);
         g->n_snd = (int)n_snd;
     }
-    if (n_spr && load_sets(g, f->fp, rd32(h + 0x50), n_spr) != 0) return -1;
+    if (n_spr && load_sets(g, f, rd32(h + 0x50), n_spr) != 0) return -1;
     g->loaded = 1;
     return 0;
 }

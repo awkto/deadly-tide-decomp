@@ -7,10 +7,9 @@
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static int16_t  rd16(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
 
-static int read_at(FILE *fp, uint32_t off, void *dst, size_t n)
+static int read_at(const L96File *f, uint32_t off, void *dst, size_t n)
 {
-    if (fseek(fp, (long)off, SEEK_SET) != 0) return -1;
-    return fread(dst, 1, n, fp) == n ? 0 : -1;
+    return l96_read(f, off, dst, n);
 }
 
 int sprites_load(SpriteCtx *c, const L96File *f)
@@ -20,7 +19,7 @@ int sprites_load(SpriteCtx *c, const L96File *f)
     for (int i = 0; i < 256; i++)
         c->pal32[i] = (uint32_t)c->palette[i][0] << 16 | (uint32_t)c->palette[i][1] << 8 | c->palette[i][2];
     uint8_t h[0x94];
-    if (read_at(f->fp, 0, h, sizeof h) != 0) return -1;
+    if (read_at(f, 0, h, sizeof h) != 0) return -1;
     uint32_t off_lut555 = rd32(h + 0x44), off_shade = rd32(h + 0x80), off_shade2 = rd32(h + 0x84);
     /* Lut_Load 0x40d960 clamps both counts to 4 and, on an 8-bit / RGB555 display, reads the
      * first (RGB555) half of each section into one contiguous buffer. */
@@ -31,9 +30,9 @@ int sprites_load(SpriteCtx *c, const L96File *f)
     c->shade_size = s1 + s2;
     c->shade = malloc(c->shade_size ? c->shade_size : 1);
     if (!c->lut555 || !c->shade) { sprites_free(c); return -1; }
-    if (read_at(f->fp, off_lut555, c->lut555, 0x8000) != 0 ||
-        (s1 && read_at(f->fp, off_shade, c->shade, s1) != 0) ||
-        (s2 && read_at(f->fp, off_shade2, c->shade + s1, s2) != 0)) {
+    if (read_at(f, off_lut555, c->lut555, 0x8000) != 0 ||
+        (s1 && read_at(f, off_shade, c->shade, s1) != 0) ||
+        (s2 && read_at(f, off_shade2, c->shade + s1, s2) != 0)) {
         fprintf(stderr, "sprites: cannot read colour tables\n");
         sprites_free(c); return -1;
     }

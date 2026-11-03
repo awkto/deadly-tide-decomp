@@ -50,12 +50,15 @@ target_link_libraries(deadlytide PRIVATE dtcore ${DT_SDL_TARGET})
 
 if(MSVC)
   set(DT_WARN /W4)
-  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)   # fopen etc. are fine; the _s variants are not C11-portable
 else()
   set(DT_WARN -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
 endif()
 target_compile_options(dtcore PRIVATE ${DT_WARN})
 target_compile_options(deadlytide PRIVATE ${DT_WARN})
+if(MSVC)   # fopen etc. are fine; the _s variants are not portable C11
+  target_compile_definitions(dtcore PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(deadlytide PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
 if(EMSCRIPTEN)
   # Browser build: deadlytide.js + deadlytide.wasm, driven by web/index.html. The user's own

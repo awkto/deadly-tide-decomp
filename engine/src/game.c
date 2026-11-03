@@ -1,6 +1,7 @@
 /* game.c - see game.h. Section numbers refer to docs/COMBAT_SPEC.md. */
 #include "game.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,8 @@ typedef struct {
     int16_t x0, y0, w, h;       /* bbox x0,y0 and draw w,h last frame */
     int32_t frame_seen;
     float   dist2;
+    float   cx, cy;             /* free-look: bbox centre last frame */
+    int8_t  cv;                 /* ... and it was on screen */
 } ActorPrev;
 
 typedef struct {
@@ -96,6 +99,8 @@ struct Game {
 
     long      frame_no, scene_frame;
     LookInfo  look;
+    int       fl_yaw, fl_pitch, fl_have;     /* free-look view at the previous Enemy_Update */
+    float     fl_sx, fl_sy;                  /* screen shift of a static point from the view change */
 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -816,7 +821,15 @@ static void streak_spawn(Game *g, const FgRecord *r, float mx, float my)
      * screen centre. 2D approximation of the predicted-view geometry (§6.3, cosmetic). */
     const ActorPrev *p = &g->prev[r->actor];
     float dx = 0, dy = 0;
-    if (p->w) {
+    if (g->type == SEG_FREELOOK) {
+        /* Free-look: use the fixup bbox centre and take out the shift caused by the player turning
+         * the view, so only the actor's own motion (relative to the world) gives the direction. */
+        if (p->cv) {
+            dx = (r->bbox[0] + r->bbox[2]) / 2.0f - p->cx - g->fl_sx;
+            dy = (r->bbox[1] + r->bbox[3]) / 2.0f - p->cy - g->fl_sy;
+            if (p->dist2 <= g->dist2[r->actor]) { dx = -dx; dy = -dy; }
+        }
+    } else if (p->w) {
         dx = (float)(r->bbox[0] + r->w / 2) - (float)(p->x0 + p->w / 2);
         dy = (float)(r->bbox[1] + r->h / 2) - (float)(p->y0 + p->h / 2);
         if (p->dist2 <= g->dist2[r->actor]) { dx = -dx; dy = -dy; }
@@ -836,6 +849,15 @@ static void enemy_update(Game *g, FgBlock *b)
 {
     int heavy = 0, light = 0, frame_dmg = 0;
     const uint8_t *hc = NULL, *lc = NULL;
+    if (g->type == SEG_FREELOOK && g->look.active) {
+        /* Pixels per engine unit at the view centre (2496 units = 360 degrees). */
+        double k = (W / 2) / tan((int16_t)rd16(g->rec + 0x4a) * 3.14159265358979323846 / 92160.0), ppu = k * 2 * 3.14159265358979323846 / 2496.0;
+        int dyaw = g->look.yaw - g->fl_yaw, dpit = g->look.pitch - g->fl_pitch;
+        dyaw = (dyaw % 2496 + 3744) % 2496 - 1248;
+        if (!g->fl_have) dyaw = dpit = 0;
+        g->fl_sx = (float)(-dyaw * ppu); g->fl_sy = (float)(dpit * ppu);
+        g->fl_yaw = g->look.yaw; g->fl_pitch = g->look.pitch; g->fl_have = 1;
+    } else g->fl_have = 0;
     for (int i = 0; b && i < b->count; i++) {
         FgRecord *r = &b->rec[i];
         if (rec_skipped(g, r)) continue;
@@ -876,6 +898,8 @@ static void enemy_update(Game *g, FgBlock *b)
         if (dmg > c[3] || frame_dmg > c[3]) { heavy = 1; hc = c; }
         if (dmg > c[0x1e] || frame_dmg > c[0x1e]) { light = 1; lc = c; }
         p->x0 = r->bbox[0]; p->y0 = r->bbox[1]; p->w = r->w; p->h = r->h; p->dist2 = g->dist2[id];
+        p->cx = (r->bbox[0] + r->bbox[2]) / 2.0f; p->cy = (r->bbox[1] + r->bbox[3]) / 2.0f;
+        p->cv = r->bbox[2] > 0 || r->bbox[3] > 0;
     }
     if (heavy) {
         fx_flash(g, 2, 20);

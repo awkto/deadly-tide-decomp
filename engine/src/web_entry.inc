@@ -19,9 +19,9 @@ EM_JS(int, js_l96_open, (const char *path), {
         if (!Module.l96Handles[i]) { Module.l96Handles[i] = f; return i; }
     Module.l96Handles.push(f);
     return Module.l96Handles.length - 1;
-});
-EM_JS(double, js_l96_size, (int h), { return Module.l96Handles[h].size; });
-EM_JS(void, js_l96_close, (int h), { Module.l96Handles[h] = null; });
+})
+EM_JS(double, js_l96_size, (int h), { return Module.l96Handles[h].size; })
+EM_JS(void, js_l96_close, (int h), { Module.l96Handles[h] = null; })
 EM_ASYNC_JS(int, js_l96_read, (int h, double off, void *buf, double n), {
     try {
         var ab = await Module.l96Handles[h].slice(off, off + n).arrayBuffer();
@@ -29,7 +29,7 @@ EM_ASYNC_JS(int, js_l96_read, (int h, double off, void *buf, double n), {
         HEAPU8.set(new Uint8Array(ab), buf);
         return 0;
     } catch (e) { console.error('l96 read failed', e); return -1; }
-});
+})
 
 static int web_rd_read(void *ctx, uint64_t off, void *buf, size_t n)
 {

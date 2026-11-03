@@ -58,13 +58,13 @@ target_compile_options(deadlytide PRIVATE ${DT_WARN})
 
 if(EMSCRIPTEN)
   # Browser build: deadlytide.js + deadlytide.wasm, driven by web/index.html. The user's own
-  # .L96 files are written into MEMFS by the page; JS calls dt_start() from the Play click.
+  # .L96 files stay as JS File objects (lazy slice reads); JS calls dt_start() from the Play click.
   set_target_properties(deadlytide PROPERTIES SUFFIX ".js")
   target_link_options(deadlytide PRIVATE
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=2GB
     "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_malloc,_free"
-    "-sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8"
-    -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -O2)
+    "-sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8"
+    -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=65536 -O2)
   add_custom_command(TARGET deadlytide POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web $<TARGET_FILE_DIR:deadlytide>)
 endif()

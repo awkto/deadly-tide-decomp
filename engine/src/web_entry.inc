@@ -1,6 +1,6 @@
 /* web_entry.inc - Emscripten entry points, included at the end of main.c (needs Player,
- * play_init/tick/finish, g_cx and the CombatOpts/SaveData types). JS writes the user's .L96
- * files into MEMFS at /NAME.L96, then calls dt_start() from a click handler (browsers only
+ * play_init/tick/finish, g_cx and the CombatOpts/SaveData types). JS registers the user's .L96
+ * File objects in Module.l96Files (read lazily, never copied), then calls dt_start() from a click handler (browsers only
  * allow audio after a user gesture). */
 #include <emscripten.h>
 
@@ -8,22 +8,52 @@ static Player g_player;
 static int g_running;
 static SaveData g_web_save;   /* in-memory pilot (save path ""), as main.c's --save none */
 
-static void web_tick(void)
+/* Lazy .L96 access: JS keeps name -> File in Module.l96Files; reads are File.slice().arrayBuffer()
+ * (async, via Asyncify), so nothing is copied into MEMFS. */
+EM_JS(int, js_l96_open, (const char *path), {
+    var p = UTF8ToString(path), base = p.split('/').pop().toUpperCase();
+    var f = Module.l96Files && Module.l96Files[base];
+    if (!f) return -1;
+    Module.l96Handles = Module.l96Handles || [];
+    for (var i = 0; i < Module.l96Handles.length; i++)
+        if (!Module.l96Handles[i]) { Module.l96Handles[i] = f; return i; }
+    Module.l96Handles.push(f);
+    return Module.l96Handles.length - 1;
+})
+EM_JS(double, js_l96_size, (int h), { return Module.l96Handles[h].size; })
+EM_JS(void, js_l96_close, (int h), { Module.l96Handles[h] = null; })
+EM_ASYNC_JS(int, js_l96_read, (int h, double off, void *buf, double n), {
+    try {
+        var ab = await Module.l96Handles[h].slice(off, off + n).arrayBuffer();
+        if (ab.byteLength !== n) return -1;
+        HEAPU8.set(new Uint8Array(ab), buf);
+        return 0;
+    } catch (e) { console.error('l96 read failed', e); return -1; }
+})
+
+static int web_rd_read(void *ctx, uint64_t off, void *buf, size_t n)
 {
-    if (!g_running) return;
-    if (play_tick(&g_player)) {
-        int rc = play_finish(&g_player);
-        g_running = 0;
-        emscripten_cancel_main_loop();
-        char js[96];
-        snprintf(js, sizeof js, "if (Module.onPlayerDone) Module.onPlayerDone(%d)", rc);
-        emscripten_run_script(js);   /* EM_ASM needs gnu mode; we build -std=c11 */
-    }
+    if (n == 0) return 0;
+    return js_l96_read((int)(intptr_t)ctx, (double)off, buf, (double)n);
+}
+static uint64_t web_rd_size(void *ctx) { return (uint64_t)js_l96_size((int)(intptr_t)ctx); }
+static void web_rd_close(void *ctx) { js_l96_close((int)(intptr_t)ctx); }
+
+static int web_l96_open(const char *path, L96Reader *out)
+{
+    int h = js_l96_open(path);
+    if (h < 0) return -1;
+    out->ctx = (void *)(intptr_t)h;
+    out->read_at = web_rd_read;
+    out->size = web_rd_size;
+    out->close = web_rd_close;
+    return 0;
 }
 
 EMSCRIPTEN_KEEPALIVE
 int dt_segment_count(const char *path)
 {
+    l96_set_open_fn(web_l96_open);
     L96File f;
     if (l96_open(&f, path) != 0) return -1;
     int n = (int)f.n_segments;
@@ -76,10 +106,18 @@ int dt_start(const char *level, int seg, int difficulty, int start_mode)
     g_web_save.difficulty = difficulty;
     co.save = g_cx.demo ? NULL : &g_web_save;   /* attract mode is not the pilot's progress */
 
+    l96_set_open_fn(web_l96_open);
     if (play_init(&g_player, &co, 2, 0, 1) != 0) return -2;
     g_running = 1;
-    emscripten_set_main_loop(web_tick, 0, 0);   /* 0 fps = requestAnimationFrame */
-    return 0;
+    /* Asyncify: L96 reads suspend the wasm stack, so no set_main_loop; yield to the browser each
+     * tick instead. Frame pacing is driven by the audio clock inside play_tick, as natively. */
+    while (!play_tick(&g_player)) emscripten_sleep(1);
+    int rc = play_finish(&g_player);
+    g_running = 0;
+    char js[96];
+    snprintf(js, sizeof js, "if (Module.onPlayerDone) Module.onPlayerDone(%d)", rc);
+    emscripten_run_script(js);   /* EM_ASM needs gnu mode; we build -std=c11 */
+    return rc;
 }
 
 int main(void) { return 0; }   /* runtime stays alive; JS drives dt_start() */

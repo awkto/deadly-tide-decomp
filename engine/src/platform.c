@@ -9,6 +9,7 @@ static SDL_Renderer    *g_ren;
 static SDL_Texture     *g_tex;
 static int              g_tex_w, g_tex_h;
 static SDL_AudioStream *g_audio;
+static SDL_AudioDeviceID g_audio_dev;
 static int              g_skip, g_act, g_any_input;
 static uint32_t         g_keys;
 static int              g_frame_w = 320, g_frame_h = 200;
@@ -56,22 +57,24 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
     /* Integer-scaled nearest-neighbour presentation of the logical frame. */
     SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
+    /* One logical device with two bound streams: the video soundtrack (U8 stereo) and the SFX
+     * mixer (S16 stereo). A device opened by SDL_OpenAudioDeviceStream refuses extra bindings. */
     SDL_AudioSpec spec = { SDL_AUDIO_U8, 2, audio_rate };
-    g_audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-    if (!g_audio) {
+    g_audio_dev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
+    g_audio = g_audio_dev ? SDL_CreateAudioStream(&spec, NULL) : NULL;
+    if (!g_audio || !SDL_BindAudioStream(g_audio_dev, g_audio)) {
         fprintf(stderr, "audio: %s\n", SDL_GetError());
         return -1;
     }
-    /* Sound effects: S16 stereo, bound to the same (logical) device as the stream audio. */
     SDL_AudioSpec sspec = { SDL_AUDIO_S16, 2, audio_rate };
-    g_sfx = SDL_CreateAudioStream(&sspec, &sspec);
-    if (!g_sfx || !SDL_BindAudioStream(SDL_GetAudioStreamDevice(g_audio), g_sfx) ||
+    g_sfx = SDL_CreateAudioStream(&sspec, NULL);
+    if (!g_sfx || !SDL_BindAudioStream(g_audio_dev, g_sfx) ||
         !SDL_SetAudioStreamGetCallback(g_sfx, sfx_fill, NULL)) {
         fprintf(stderr, "sfx: %s (continuing without sound effects)\n", SDL_GetError());
         if (g_sfx) SDL_DestroyAudioStream(g_sfx);
         g_sfx = NULL;
     }
-    SDL_ResumeAudioStreamDevice(g_audio);
+    SDL_ResumeAudioDevice(g_audio_dev);
     g_frame_w = w; g_frame_h = h;
 
     if (SDL_InitSubSystem(SDL_INIT_JOYSTICK)) {
@@ -91,6 +94,8 @@ void plat_shutdown(void)
     if (g_joy) SDL_CloseJoystick(g_joy);
     g_joy = NULL;
     if (g_audio) SDL_DestroyAudioStream(g_audio);
+    if (g_audio_dev) SDL_CloseAudioDevice(g_audio_dev);
+    g_audio_dev = 0;
     if (g_tex) SDL_DestroyTexture(g_tex);
     if (g_ren) SDL_DestroyRenderer(g_ren);
     if (g_win) SDL_DestroyWindow(g_win);

@@ -16,3 +16,7 @@ Tested on Ubuntu 24.04, Wine 9, headless (Xvfb). What it takes:
 5. Run `DT.EXE` inside `wine explorer /desktop=DT,640x480`; click START. The engine switches to 320x240.
 
 `play.sh` automates launch + click + screenshots under `xvfb-run`.
+
+Reaching LEVEL01 combat in the original: create a fresh pilot (a new `CurrentPlayer` name with no
+`HighestLevel`). It starts at LOGOS and runs through the films into LEVEL01 by itself. Don't press Esc
+during the film or loading screens; it can quit to the launcher.

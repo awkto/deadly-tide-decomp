@@ -9,14 +9,14 @@ Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 | 1 | `.L96` container format | **done** — `docs/L96_FORMAT.md`, `tools/l96.py` |
 | 2 | Asset dump | **done** — all 29 files, 413 segments, ~92 min video; private copy in `dump/`; CD4 music as FLAC |
 | 3 | Decompile `DTPLAYER.EXE` | done for everything the port needs: `docs/ENGINE_MAP.md`, `SCENE_GRAPH.md`, `GAMEPLAY_DATA.md`, `COMBAT_SPEC.md`, `FREELOOK_SPEC.md` |
-| 4 | Original under Wine | **works** — see `tools/wine/README.md`; first reference recording taken |
+| 4 | Original under Wine | **works** — see `tools/wine/README.md`; LEVEL01 combat compared side by side with the port: HUD, crosshair, palette, sprites, explosions match |
 | 5 | C + SDL3 engine | feature-complete: combat, free-look 3D, hub mission select, saves, demo mode; bot finishes the whole game; windowed mouse/keyboard play tested under Xvfb + xdotool |
 | 6 | WASM build | works in Chrome: lazy File.slice reads (Asyncify, 64MB heap for any level), level/full/demo start, difficulty, mouse combat, 15 fps |
 
 ## Next
-1. Compare against the Wine reference rig side by side (HUD, palette, timings, damage feel) and fix differences.
+1. Finer timing/damage comparison with the original (scripted identical input in both; first-enemy time looked ~8 s vs ~10 s, unverified).
 2. Web: AudioWorklet instead of the deprecated ScriptProcessorNode (SDL), mobile/touch input, a hosted page (code only, user supplies files).
-3. Free-look enemy shot streaks; real-user play testing for difficulty balance.
+3. Real-user play testing for difficulty balance. CI (GitHub Actions) builds Linux/Windows/macOS/wasm; tag v* for a release.
 
 ## What the game actually is
 

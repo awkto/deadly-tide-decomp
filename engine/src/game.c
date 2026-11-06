@@ -43,7 +43,10 @@ typedef struct {
 } Shot;
 
 typedef struct { int actor, sfx; long until; } LoopSlot;
-typedef struct { int life; float sx, sy, ex, ey; int ring; } Streak;
+typedef struct { int life; float sx, sy, ex, ey; int ring; int d3; double p[2][3]; } Streak;   /* d3: p = world S, E (type 1) */
+
+/* A camera view as Mat_LookAt builds it: orthonormal basis, roll, and the projection scale. */
+typedef struct { double c[3], f[3], r[3], u[3], cr, sr, k; } View;
 
 struct Game {
     GameOpts  o;
@@ -99,6 +102,10 @@ struct Game {
 
     long      frame_no, scene_frame;
     LookInfo  look;
+    /* Frame-header camera (type 1): current, and as latched by the previous Enemy_Update (6.1). */
+    double    cam[3], lk[3], roll;  int cam_have;
+    double    lat_cam[3], lat_lk[3], lat_roll;  int lat_have;
+    double    pred_cam[3], pred_lk[3], pred_roll;
     int       fl_yaw, fl_pitch, fl_have;     /* free-look view at the previous Enemy_Update */
     float     fl_sx, fl_sy;                  /* screen shift of a static point from the view change */
 };
@@ -388,7 +395,7 @@ static void reset_for_scene(Game *g)
     if (g->o.verbose > 2) { int n = 0; for (int i = 0; i < g->n_act; i++) n += g->state[i] < -0x40; fprintf(stderr, "reset %s:%d alive %d/%d\n", g->stem, g->seg, n, g->n_act); }
     memset(g->loops, 0, sizeof g->loops);
     g->hw_band = 100; g->hw_t20 = g->hw_t50 = g->hw_t80 = -0x8000;
-    memset(g->streaks, 0, sizeof g->streaks);
+    memset(g->streaks, 0, sizeof g->streaks); g->cam_have = g->lat_have = 0;
     weapon_reset(g);
     g->act_ammo = g->act_start; g->act_req = 0; g->shots_fired = 0;
     g->health = 10000; g->kills = 0;
@@ -535,6 +542,10 @@ void game_frame_pre(Game *g, FgBlock *b, const uint8_t *hdr)
         /* Obj_ProjectAll 0x403780: flip the bbox to top-down, store |cam - pos|^2. */
         int vh = (int32_t)rd32(g->rec + 0x40);
         int32_t cam[3] = { (int32_t)rd32(hdr + 4), (int32_t)rd32(hdr + 8), (int32_t)rd32(hdr + 12) };
+        if (g->type == SEG_RAIL) {
+            for (int i = 0; i < 3; i++) { g->cam[i] = cam[i]; g->lk[i] = (int32_t)rd32(hdr + 16 + 4 * i); }
+            g->roll = (int32_t)rd32(hdr + 0x1c); g->cam_have = 1;
+        }
         for (int i = 0; i < b->count; i++) {
             FgRecord *r = &b->rec[i];
             int16_t y0 = r->bbox[1];
@@ -813,36 +824,90 @@ static void input_poll(Game *g, const FgBlock *b)
 
 /* ---- enemy fire (§6) ----------------------------------------------------------------------- */
 
+static void view_make(const Game *g, View *v, const double cam[3], const double look[3], double roll)
+{
+    /* Same construction as tools/sprites.py project(): forward, right = up x forward (up = +Y), up. */
+    double f[3], fl = 0;
+    for (int i = 0; i < 3; i++) { v->c[i] = cam[i]; f[i] = look[i] - cam[i]; fl += f[i] * f[i]; }
+    fl = sqrt(fl); if (fl < 1e-9) fl = 1;
+    for (int i = 0; i < 3; i++) v->f[i] = f[i] / fl;
+    double rx = v->f[2], rz = -v->f[0], rl = sqrt(rx * rx + rz * rz); if (rl < 1e-9) rl = 1;
+    v->r[0] = rx / rl; v->r[1] = 0; v->r[2] = rz / rl;
+    v->u[0] = -(v->f[1] * v->r[2] - v->f[2] * v->r[1]);
+    v->u[1] = -(v->f[2] * v->r[0] - v->f[0] * v->r[2]);
+    v->u[2] = -(v->f[0] * v->r[1] - v->f[1] * v->r[0]);
+    v->cr = cos(roll * 3.14159265358979323846 / 180); v->sr = sin(roll * 3.14159265358979323846 / 180);
+    v->k = (W / 2) / tan((int16_t)rd16(g->rec + 0x4a) * 3.14159265358979323846 / 92160.0);
+}
+
+/* Proj_ScreenToWorld 0x40b630: the point `dist` along the ray through top-down screen (sx, sy). */
+static void view_unproject(const View *v, double sx, double sy, double dist, double out[3])
+{
+    double xp = (sx - W / 2.0) / v->k, yp = (sy - H / 2.0) / v->k;
+    double x = xp * v->cr + yp * v->sr, y = -xp * v->sr + yp * v->cr, d[3], l = 0;
+    for (int i = 0; i < 3; i++) { d[i] = x * v->r[i] + y * v->u[i] + v->f[i]; l += d[i] * d[i]; }
+    l = sqrt(l);
+    for (int i = 0; i < 3; i++) out[i] = v->c[i] + d[i] / l * dist;
+}
+
+/* World point -> top-down screen and depth (Proj_WorldToScreen 0x40b370). */
+static double view_project(const View *v, const double p[3], double *sx, double *sy)
+{
+    double d[3] = { p[0] - v->c[0], p[1] - v->c[1], p[2] - v->c[2] }, X = 0, Y = 0, Z = 0;
+    for (int i = 0; i < 3; i++) { X += d[i] * v->r[i]; Y += d[i] * v->u[i]; Z += d[i] * v->f[i]; }
+    double x2 = X * v->cr - Y * v->sr, y2 = X * v->sr + Y * v->cr, zc = Z < 1e-6 ? 1e-6 : Z;
+    *sx = W / 2.0 + x2 * v->k / zc; *sy = H / 2.0 + y2 * v->k / zc;
+    return Z;
+}
+
 static void streak_spawn(Game *g, const FgRecord *r, float mx, float my)
 {
     int slot = -1;
     for (int i = 0; i < N_STREAKS; i++) if (g->streaks[i].life <= 0) { slot = i; break; }
     if (slot < 0) return;
     /* Direction: the actor's on-screen motion (reversed when it recedes), else outward from the
-     * screen centre. 2D approximation of the predicted-view geometry (§6.3, cosmetic). */
+     * screen centre (6.3 step 1). */
     const ActorPrev *p = &g->prev[r->actor];
     float dx = 0, dy = 0;
+    float ax = (r->bbox[0] + r->bbox[2]) / 2.0f, ay = (r->bbox[1] + r->bbox[3]) / 2.0f;   /* actor's screen position */
     if (g->type == SEG_FREELOOK) {
         /* Free-look: use the fixup bbox centre and take out the shift caused by the player turning
          * the view, so only the actor's own motion (relative to the world) gives the direction. */
         if (p->cv) {
-            dx = (r->bbox[0] + r->bbox[2]) / 2.0f - p->cx - g->fl_sx;
-            dy = (r->bbox[1] + r->bbox[3]) / 2.0f - p->cy - g->fl_sy;
+            dx = ax - p->cx - g->fl_sx;
+            dy = ay - p->cy - g->fl_sy;
             if (p->dist2 <= g->dist2[r->actor]) { dx = -dx; dy = -dy; }
         }
     } else if (p->w) {
-        dx = (float)(r->bbox[0] + r->w / 2) - (float)(p->x0 + p->w / 2);
-        dy = (float)(r->bbox[1] + r->h / 2) - (float)(p->y0 + p->h / 2);
+        dx = ax - (float)(p->x0 + p->w / 2);
+        dy = ay - (float)(p->y0 + p->h / 2);
         if (p->dist2 <= g->dist2[r->actor]) { dx = -dx; dy = -dy; }
     }
-    if (dx * dx + dy * dy < 0.25f) { dx = mx - W / 2.0f; dy = my - H / 2.0f + 40; }
+    int d3 = g->type == SEG_RAIL && g->cam_have;
+    float ox = d3 ? ax : mx, oy = d3 ? ay : my;     /* ray origin: the actor (type 1) or the muzzle (free-look) */
+    if (dx * dx + dy * dy < 0.25f) { dx = ox - W / 2.0f; dy = oy - H / 2.0f + 40; }
     if (dx * dx + dy * dy < 0.25f) dy = 1;
     float t = 1e9f;
-    if (dx > 0) t = (W - 1 - mx) / dx < t ? (W - 1 - mx) / dx : t;
-    if (dx < 0) t = -mx / dx < t ? -mx / dx : t;
-    if (dy > 0) t = (H - 1 - my) / dy < t ? (H - 1 - my) / dy : t;
-    if (dy < 0) t = -my / dy < t ? -my / dy : t;
-    g->streaks[slot] = (Streak){ 3, mx, my, mx + dx * t, my + dy * t, 0 };
+    if (dx > 0) t = (W - 1 - ox) / dx < t ? (W - 1 - ox) / dx : t;
+    if (dx < 0) t = -ox / dx < t ? -ox / dx : t;
+    if (dy > 0) t = (H - 1 - oy) / dy < t ? (H - 1 - oy) / dy : t;
+    if (dy < 0) t = -oy / dy < t ? -oy / dy : t;
+    if (t < 0) t = 0;
+    if (d3) {
+        /* E: the clipped ray end unprojected at camDist through the predicted view; S: the muzzle
+         * through the current view at sqrt(dist2). The segments are projected per frame (draw_streaks). */
+        View cur, pre;
+        view_make(g, &cur, g->cam, g->lk, g->roll);
+        view_make(g, &pre, g->pred_cam, g->pred_lk, g->pred_roll);
+        double cd = 0;
+        for (int i = 0; i < 3; i++) cd += (g->cam[i] - g->lk[i]) * (g->cam[i] - g->lk[i]);
+        Streak *k = &g->streaks[slot];
+        *k = (Streak){ 3, 0, 0, 0, 0, 0, 1, { { 0, 0, 0 }, { 0, 0, 0 } } };
+        view_unproject(&cur, mx, my, sqrt((double)g->dist2[r->actor]), k->p[0]);
+        view_unproject(&pre, ox + dx * t, oy + dy * t, sqrt(cd), k->p[1]);
+        return;
+    }
+    g->streaks[slot] = (Streak){ 3, mx, my, mx + dx * t, my + dy * t, 0, 0, { { 0, 0, 0 }, { 0, 0, 0 } } };
 }
 
 /* Enemy_Update 0x4043f0 (§6.2). */
@@ -859,6 +924,16 @@ static void enemy_update(Game *g, FgBlock *b)
         g->fl_sx = (float)(-dyaw * ppu); g->fl_sy = (float)(dpit * ppu);
         g->fl_yaw = g->look.yaw; g->fl_pitch = g->look.pitch; g->fl_have = 1;
     } else g->fl_have = 0;
+    if (g->type == SEG_RAIL && g->cam_have) {
+        /* 6.1: camera velocity and roll rate from the previous Enemy_Update (x2.0), predicted view = cam + v. */
+        for (int i = 0; i < 3; i++) {
+            double v = g->lat_have ? (g->cam[i] - g->lat_cam[i]) * 2.0 : 0;
+            g->pred_cam[i] = g->cam[i] + v; g->pred_lk[i] = g->lk[i] + v;
+            g->lat_cam[i] = g->cam[i]; g->lat_lk[i] = g->lk[i];
+        }
+        g->pred_roll = g->roll + (g->lat_have ? (g->roll - g->lat_roll) * 2.0 : 0);
+        g->lat_roll = g->roll; g->lat_have = 1;
+    }
     for (int i = 0; b && i < b->count; i++) {
         FgRecord *r = &b->rec[i];
         if (rec_skipped(g, r)) continue;
@@ -1008,17 +1083,60 @@ static void draw_gun_flash(const Game *g, uint32_t *dst)
     }
 }
 
+/* Clip a screen segment to the frame (Liang-Barsky) and draw it. */
+static void draw_clipped(uint32_t *dst, double x0, double y0, double x1, double y1, uint32_t v, int thick)
+{
+    double t0 = 0, t1 = 1, dx = x1 - x0, dy = y1 - y0;
+    double pp[4] = { -dx, dx, -dy, dy }, qq[4] = { x0, W - 1 - x0, y0, H - 1 - y0 };
+    for (int i = 0; i < 4; i++) {
+        if (pp[i] == 0) { if (qq[i] < 0) return; continue; }
+        double t = qq[i] / pp[i];
+        if (pp[i] < 0) { if (t > t1) return; if (t > t0) t0 = t; }
+        else { if (t < t0) return; if (t < t1) t1 = t; }
+    }
+    draw_line(dst, (int)(x0 + dx * t0), (int)(y0 + dy * t0), (int)(x0 + dx * t1), (int)(y0 + dy * t1), v, thick);
+}
+
+/* Proj_Segment 0x40b160 for a world segment: near-plane clip, project, clip to the frame, draw. */
+static void draw_world_segment(const View *cur, uint32_t *dst, double p0[3], double p1[3], uint32_t v, int thick)
+{
+    double sx, sy, z0 = view_project(cur, p0, &sx, &sy), z1 = view_project(cur, p1, &sx, &sy);
+    if (z0 < 1 && z1 < 1) return;
+    if (z0 < 1 || z1 < 1) {
+        double *bad = z0 < 1 ? p0 : p1, *good = z0 < 1 ? p1 : p0, zb = z0 < 1 ? z0 : z1, zg = z0 < 1 ? z1 : z0;
+        double t = (1 - zb) / (zg - zb);
+        for (int j = 0; j < 3; j++) bad[j] += (good[j] - bad[j]) * t;
+    }
+    double x0, y0, x1, y1;
+    view_project(cur, p0, &x0, &y0); view_project(cur, p1, &x1, &y1);
+    draw_clipped(dst, x0, y0, x1, y1, v, thick);
+}
+
 static void draw_streaks(Game *g, uint32_t *dst)
 {
     const SprSet *s = set_get(g, 4, 0);
     uint32_t v = s && s->count ? frame_colour(g, &s->fr[s->count - 1]) : 0xff8040;
     static const float seg[3][2] = { { 0.0f, 0.1f }, { 0.4f, 0.5f }, { 0.6f, 1.0f } };
+    View cur;
+    int have_view = g->cam_have && g->type == SEG_RAIL;
+    if (have_view) view_make(g, &cur, g->cam, g->lk, g->roll);
     for (int i = 0; i < N_STREAKS; i++) {
         Streak *k = &g->streaks[i];
         if (k->life <= 0) continue;
-        float a = seg[k->ring][0], b = seg[k->ring][1];
-        draw_line(dst, (int)(k->sx + (k->ex - k->sx) * a), (int)(k->sy + (k->ey - k->sy) * a),
-                  (int)(k->sx + (k->ex - k->sx) * b), (int)(k->sy + (k->ey - k->sy) * b), v, g->rec[0x12] == 3);
+        double a = seg[k->ring][0], b = seg[k->ring][1];
+        if (k->d3) {
+            if (have_view) {
+                double p0[3], p1[3];
+                for (int j = 0; j < 3; j++) {
+                    p0[j] = k->p[0][j] + (k->p[1][j] - k->p[0][j]) * a;
+                    p1[j] = k->p[0][j] + (k->p[1][j] - k->p[0][j]) * b;
+                }
+                draw_world_segment(&cur, dst, p0, p1, v, g->rec[0x12] == 3);
+            }
+        } else {
+            draw_line(dst, (int)(k->sx + (k->ex - k->sx) * (float)a), (int)(k->sy + (k->ey - k->sy) * (float)a),
+                      (int)(k->sx + (k->ex - k->sx) * (float)b), (int)(k->sy + (k->ey - k->sy) * (float)b), v, g->rec[0x12] == 3);
+        }
         k->life--; k->ring = (k->ring + 1) % 3;
     }
 }

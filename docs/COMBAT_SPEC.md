@@ -165,9 +165,11 @@ It is called only from `Player_Update` on type-1 aim frames, and from the type-2
 
 In 640×480 and 320×240 modes this maps the screen onto 0..319 × 0..199. In 320×200 mode,
 y·5/6 tops out at 165, so the bottom 34 rows cannot be reached. That is a quirk of the original. A
-port should map the window onto 320×200 directly. Which mouse button sets which bit is in the
-WndProc (0x416fb0), which has not been decompiled. The likely mapping is left = bit 0, right = bit 1
-(L). Space sets `g_actReq` directly (SCENE_GRAPH §4).
+port should map the window onto 320×200 directly. The WndProc (0x416fb0, disassembled) calls
+`Input_SetButtons` with 1 on left-button-down, 2 on right-button-down, and 0 on **either** button-up, so left = bit 0
+(fire) and right = bit 1 (alt / path pick), exactly as ours, but the value is assigned, not OR-ed: releasing one
+button while holding the other clears both (H). There is no middle-button or double-click handling (double-clicks go to
+`DefWindowProc`). Space sets `g_actReq` directly (SCENE_GRAPH §4).
 
 **Joystick.** `joyGetPosEx(0)` with `dwFlags = 0x83` (X, Y, buttons) writes the raw X and Y straight
 into xhair_x/xhair_y and the buttons into +0x1e8 (the JOYINFOEX overlays the player struct). If the
@@ -477,8 +479,12 @@ one every second frame, re-centring on the first victim when the impact area is 
 takes **one** hit.
 
 **`Hud_DrawACT` 0x4169f0.** For each bit k set in actAnim, frame k of the ACT set is drawn centred
-at x = 160 + (actShot.x − 160)·S[k]/(2^(m+1) − 1), and at bottom-up y = (100 − actShot.y)·S[k]/(2^(m+1) − 1)
-(M: the y term looks inconsistent with top-down shot coordinates; verify visually).
+with its left edge at x = 160 + (actShot.x − 160)·S[k]/(2^(m+1) − 1) − w/2 and its bottom edge at
+y = (100 − actShot.y)·S[k]/(2^(m+1) − 1) (H, read from the disassembly of 0x4169f0 and checked against the
+engine's `draw_act`). `S[k]` is the step table at +0x90 of the set (GAMEPLAY_DATA §5), `m` the frame count, and
+the y argument goes straight to `Spr_Draw` as a bottom-up row (GAMEPLAY_DATA §1) with **no** h/2 term, unlike x.
+The asymmetry is real: the original does not centre the sprite vertically here. The earlier doubt about the y term
+is closed.
 
 **Ammo.** It comes from the L96 header +0x88 at level start (0, 3 or 5 per level in the data), or
 from the registry `ACTNum` after a save-point restore. It is saved on save-point entry. The registry
@@ -547,15 +553,19 @@ hit is 3–6, i.e. 300–600 health. Difficulty changes damage only by picking a
 classes differ by hit % and spawn % (for example LEVEL01 hit % 20/16/20, spawn % 75/75/85 for index
 0/1/2), with a few dmg and hp changes (LEVEL10, LEVEL14).
 
-### 6.3 Enemy shot streaks (M; cosmetic)
+### 6.3 Enemy shot streaks (H for the formulas below; cosmetic)
 
 There are 8 slots (0x422b40, each a life counter set to 3) and a 3-entry ring (0x421098) of per-slot
 3D segments (0x422b60/0x422b78, 48 bytes = 2 points). On a spawn:
-1. Take the on-screen motion of the actor since the last frame (×512, halved until |dx| ≥ |dy|, /8
-   if it exceeds ±0x7fff). Reverse it if the actor is receding (prev.dist2 ≤ dist2).
-2. Clip the line from the muzzle along that direction to the screen edge and unproject the endpoint
-   at camDist through the predicted view. That gives E. The start S is the muzzle world point, and
-   d = (E − S)·0.1.
+1. Take the on-screen motion of the actor since the last frame: the record's current position
+   (bbox corner pair, fields +8/+9 on type 1, +0xc/+0xd otherwise; swapped on type 2) minus the stored previous one
+   (table 0x423018), ×512, with dy halved until |dy| ≤ |dx|, and everything /8 if a component leaves ±0x7fff.
+   Reverse it if the actor is receding (prev.dist2 ≤ dist2).
+2. Clip the ray that **starts at the actor's current screen position** (not the muzzle, H from the call at
+   0x404c9x: `FUN_0040b6b0` is a plain line-to-rectangle clip against 0..w−1 × 0..h−1) and runs along that direction
+   to the screen edge, and unproject the endpoint (`FUN_0040b630`) at camDist (double at 0x4210a0) through the
+   predicted view. That gives E. The start S is the muzzle unprojected through the current view at sqrt(dist2).
+   d = (E − S)·0.1 (constant 0x420040 = 0.1, and 0x420048 = 3.0 gives the S+4d point; H, both read from the data).
 3. Store [S, S+d] for this ring frame, [S+4d, S+5d] for the next, and [S+6d, E] for the one after.
 
 Each frame, for each live slot:
@@ -565,6 +575,11 @@ Each frame, for each live slot:
 * Clip and `Fx_DrawTracer` it, thick if seg[0x12] == 3. Then life-- and ring++ (mod 3).
 
 The streak is drawn 3 times over 3 frames. It is visual only: the damage was applied at spawn.
+
+Difference in our engine (`streak_spawn`, game.c): it clips from the muzzle in 2D and interpolates the endpoint in
+screen space, instead of starting from the actor's position and unprojecting through the predicted view. The
+streak therefore differs a little in direction and length from the original. It touches no gameplay state, so it was
+left as a cosmetic follow-up.
 
 ## 7. Health, death and screen effects
 
@@ -807,12 +822,12 @@ buffer. Plain values (no hash): `DifficultyLevel`, `FlipControl`, `UseJoystick`,
 
 ## 13. Open points
 
-* WndProc 0x416fb0 is not decompiled: the mouse-button → bit mapping, the key toggles for FlipControl
-  (0x41717c writes `g_flipY`), and the debug keys.
+* (closed) WndProc 0x416fb0: see SCENE_GRAPH §4 for the keys, and §5 above for the buttons. `FlipControl` is only
+  re-read on window activation (0x41717c writes `g_flipY`); there are no toggle keys and no debug keys.
 * The flash tint colours (tables 0x42a500…0x42cb20 are filled by code we did not trace).
 * The contents of HUD frames 2, 3 and 5 (assumed "ready", "low health" and Level11 text); gauge style
   1 frames 0xb–0xe.
-* The `Hud_DrawACT` y formula, and the exact enemy-streak geometry (cosmetic).
+* The enemy-streak endpoint is only approximated by the engine (cosmetic, §6.3).
 * table28 bytes +0x14…+0x27, and class bytes 0, 4 and the unused tail of the explosion list.
 * The `Branch_Resolve` sampling lead, which depends on the reader thread's progress (it is not
   deterministic in the original).

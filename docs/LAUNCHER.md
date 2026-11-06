@@ -66,7 +66,7 @@ The window class and title are both `Deadly Tide PCC` ("PCC" = Pilot Control Cen
 8. **ABOUT.** Shows the 386x346 about picture (`bmp104`: copyright, Rainbow Studios and TRG3 logos, "Product
    ID:" line, legal text) and scrolls the 386x1500 credits strip (`bmp110`) in it (0x4141xx, bitmap ids
    0x68 / 0x6e; M). The product id string template is `xxxxx-xxx-xxxxxxx`; where the real value is read from
-   is not decoded (L, see §7).
+   is the registry value `PID` (H, see §7).
 9. **START / CONTINUE** (handler 0x405e5a, H):
    1. If the pilot name box is empty: "You need to enter a pilot name before playing the game. Would you like to
       enter one now?" (msg 25, Yes/No). Yes opens the ADD dialog, No returns.
@@ -165,7 +165,7 @@ launcher's `FindWindow` check; the engine also enumerates windows for another in
 | option | launcher | engine behaviour |
 |---|---|---|
 | Pilot (`CurrentPlayer`) | name + subkey | **yes**: selects the save slot; `Demo` -> demo mode |
-| `GraphicQuality` 0..2 | radio I-III | **yes**: index into the mode choice of `DD_PickMode` 0x40ba90 (the list of usable DirectDraw modes ordered by memory and capability; 8-bit 320x200/320x240/640x480+letterbox or 16-bit 320x240/640x480; ENGINE_MAP §1). Exact I/II/III to resolution mapping is not decoded (M). |
+| `GraphicQuality` 0..2 | radio I-III | **yes**: index into the mode choice of `DD_PickMode` 0x40ba90 (the list of usable DirectDraw modes ordered by memory and capability; 8-bit 320x200/320x240/640x480+letterbox or 16-bit 320x240/640x480; ENGINE_MAP §1). The mapping is decoded in §7a (H). |
 | `DifficultyLevel` | radio I-III | **yes**: actor classes, regen, gun heat (COMBAT_SPEC §11) |
 | `UseJoystick` | MOUSE/JOYSTICK | **yes**: mouse or `joyGetPosEx` input (COMBAT_SPEC §5) |
 | `FlipControl` | FLIP DIRECTION | **yes**: inverts Y (mouse flips from top, joystick default is flight style) |
@@ -240,10 +240,35 @@ everything else can be the original bitmaps if rights allow, otherwise redrawn.
 * How START chooses the 6 animation frames and their timing, and the I/II/III state-set assignment: the sprite
   classes (vtable at 0x427518 and friends) were not decompiled. Timer 100 ms is used only by the disc dialog.
 * Exact sprite coordinates; only the pilot field (126,65,245x12 rows) is confirmed from the code.
-* The ABOUT window flow and where the "Product ID" string comes from (the registry value `PID` is not read by
-  anything we found in DT.EXE; the 0x4142f5 function only builds the template).
-* Whether GRAPHIC QUALITY alone triggers the restart prompt (handler 0x405436 is shared by the radio groups).
+* (closed) The "Product ID" string: the ABOUT builder (0x4142f5) calls 0x411349, which reads the REG_SZ value `PID`
+  (up to 100 chars) from the launcher's product registry key (the same key that holds `CurrentPlayer`, opened by 0x4118fb). Only if the value
+  is absent or not a string does it fall back to the template `xxxxx-xxx-xxxxxxx`. Nothing in DT.EXE writes `PID`; it is presumably
+  written by SETUP.EXE (M, SETUP not checked).
+* Whether GRAPHIC QUALITY alone triggers the restart prompt. The handler 0x405436 is an on-change method of a radio-group class (vtable 0x427100, slots 0x4053eb and 0x405436): when the selection differs from the stored one and the player window exists (0x415900), it asks the restart question (0x415923) and on Cancel puts the previous value back. Which group objects use that class (quality only, or difficulty too) was not decided: its constructor (about 0x4043e3) is not in the Ghidra export (**unresolvable statically from the export; a disassembly of the constructor would settle it**).
 * Which of the 27 WAVE resources plays on which event.
 * Behaviour of `RegDeleteKey` on names with `\`, and any name filtering in the edit box subclass at 0x408bcd.
-* Meaning of `GraphicQuality` index vs the resolution actually chosen (engine side).
+* (closed, see §7a) `GraphicQuality` index versus the video mode.
 * Not run under Wine: everything here is from the static decompile, the resource tables and the SETUP.EXE strings.
+
+## 7a. GraphicQuality to video mode (`DD_PickMode` 0x40ba90, H, from the disassembly)
+
+The registry value is read by 0x40cf00 (default 2, and any value above the limit 2 falls back to 2). `DD_Init` passes it to
+`DD_PickMode`; values of 1000 or more are used directly as a mode code (a debug override). `EnumDisplayModes` (callback 0x40b940)
+first sets one availability flag per mode: 320x200, 320x240, 640x400 and 640x480, each in 8 and 16 bits. `DD_PickMode` then fills a
+three-entry list (index 2 = best) from the top, using the free video memory plus the current mode's size:
+
+| mode code | size, depth | condition |
+|---|---|---|
+| 0x3fc | 320x240, 16-bit | available; takes slot 2 |
+| 0x3fb | 640x480, 16-bit (flag 0x421588 = 1) | 640x480x16 available and memory at least 0x1c2000 bytes |
+| 0x3fa | 640x480, 16-bit (flag 0x421588 = 0) | 640x480x16 available but memory below 0x1c2000 |
+| 0x3f9 | 320x240, 8-bit | available (fills the remaining lower slots) |
+| 0x3f8 | 640x480, 8-bit (flag = 1) | 640x480x8 available and memory at least 0xe1000 bytes |
+| 0x3f6 | 640x480, 8-bit (flag = 0) | fallback fill for the lowest slots |
+| 0x3f7 | 320x200, 8-bit | defined in `DD_Init` but never chosen by the picker (the 320x200 flags are set and then ignored) |
+
+Typical result on a card with everything available: quality 0 (I) = 0x3f9 (320x240 8-bit), quality 1 (II) = 0x3fb (640x480
+16-bit), quality 2 (III, the default) = 0x3fc (320x240 16-bit). With only 8-bit modes, all three indexes collapse to 0x3f9 (or to
+0x3f8 / 0x3f6 when 320x240x8 is missing); if no usable mode exists the picker returns 0 and the game fails to start. The
+render buffer is always 320x200; the mode only changes the presentation size and the pixel depth (`g_bpp`). All 640x480 modes carry a 40-row border (field 0x421558 = 0x28, 0x14 for 320x240), and the flag at 0x421588 only selects which back-buffer creation path `DD_Init` takes (1 = system-memory surface plus a lock pointer, 0 = plain surface); its exact role in presentation was not traced (L). Our engine ignores
+`GraphicQuality` and always renders to a window, which is a deliberate simplification.

@@ -15,6 +15,8 @@ int scene_load(Scene *sc, const L96File *f)
     if (l96_read(f, 0, h, sizeof h) != 0) return -1;
     uint32_t n_hs = rd32(h + 0x30), off_hs = rd32(h + 0x60);
 
+    if (f->rd.size && (uint64_t)off_hs + (uint64_t)n_hs * SCENE_HS_REC > f->rd.size(f->rd.ctx)) return -1;   /* table past EOF */
+
     sc->n_segments = (int)f->n_segments;
     sc->n_hotspots = (int)n_hs;
     sc->seg = calloc(f->n_segments ? f->n_segments : 1, sizeof *sc->seg);
@@ -39,7 +41,7 @@ int scene_load(Scene *sc, const L96File *f)
     }
     for (uint32_t i = 0; i < n_hs; i++) {
         uint8_t r[SCENE_HS_REC];
-        if (l96_read(f, off_hs + SCENE_HS_REC * i, r, sizeof r) != 0) { scene_free(sc); return -1; }
+        if (l96_read(f, (uint64_t)off_hs + (uint64_t)SCENE_HS_REC * i, r, sizeof r) != 0) { scene_free(sc); return -1; }
         Hotspot *hp = &sc->hs[i];
         hp->target = (int32_t)rd32(r);
         hp->flags  = rd32(r + 4);

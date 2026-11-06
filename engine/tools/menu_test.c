@@ -132,11 +132,11 @@ int main(int argc, char **argv)
     click(200, 380);                        /* EXIT */
     idle(10);
     dump("exit_opening");
-    idle(30);
+    idle(40);
     move(190, 272);
     dump("exit_open");
     click(190, 272);                        /* NO */
-    idle(30);
+    idle(40);
     dump("exit_cancelled");
     click(460, 52 + 0);                     /* HELP is at 411,41: x 460 hits it */
     dump("help");

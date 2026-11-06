@@ -27,6 +27,14 @@ Evidence for bucket A: the library block starts right after the last game functi
 
 Note on `symbols.tsv`: all 215 rows are DTPLAYER.EXE addresses (0x4021a0 to 0x418240), none belong to DT.EXE.
 
+## Recovery pass for the launcher (DT.EXE) and the player stubs
+
+A headless Ghidra 12.2 pass that created functions at every code pointer in the data sections (vtables) and at every call target
+without a function added 474 functions to DT.EXE and 23 to DTPLAYER.EXE. Almost all are 3-byte vtable stubs, thunks and
+destructors; the valuable ones were the static initialisers 0x403f60 / 0x404754 / 0x4046ae (sprite tables and placements) and
+the button and tick methods around 0x4056a5, 0x405547, 0x405e5a, 0x405f0d, 0x40b9ad, 0x40bb5a, 0x40bd5f and 0x41a8d2. They are
+described in LAUNCHER section 7b. The DTPLAYER additions contain no game logic, so the player's coverage figures above stand.
+
 ## By subsystem
 
 | Subsystem | Functions | B | C | D | A |

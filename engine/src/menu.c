@@ -15,10 +15,12 @@ enum {
     B_JOY_SEL = 130, B_MOUSE_SEL = 131, B_CAL_H = 141, B_JOY_H = 150, B_MOUSE_H = 151,
     B_ADD_DIS = 152, B_CAL_DIS = 153, B_DEL_DIS = 154, B_MOUSE_N = 157, B_JOY_DIS = 182,
     B_ARROW_P = 124, B_ARROW_N = 155, B_FLIP_OFF = 145, B_FLIP_ON = 146, B_FLIP_P = 125,
-    B_SQ_SEL = 121, B_SQ_HOV = 142, B_SQ_PRS = 147,       /* + 0..2 */
+    /* I/II/III squares: frame 0 is the idle panel itself, frame 1 the mid sprite, frame 2 the lit sprite (+ 0..2);
+     * quality row = 126/147, difficulty row = 121/142 (DT.EXE 0x403273 tables, LAUNCHER.md 6) */
+    B_SQ_Q_MID = 126, B_SQ_Q_LIT = 147, B_SQ_D_MID = 121, B_SQ_D_LIT = 142,
     B_EXIT_N = 132, B_EXIT_P = 133, B_EXIT_A = 134, B_EXIT_B = 136, B_EXIT_C = 137, B_EXIT_D = 138,
     B_NO_H = 139, B_YES_H = 140,
-    B_START_HOV = 161, B_START_PRS = 164,                  /* 161..163 glow, 164 flash */
+    B_START_PRS = 166,                                     /* START pressed (161..164 play only after the click) */
     B_METER = 158, B_KNOB = 159,
     B_DLG_ADD = 172, B_DLG_DEL = 179,
     B_CANCEL = 170, B_CANCEL_H = 171, B_OK = 173, B_OK_H = 174, B_NO = 175, B_NO_H2 = 176,
@@ -62,8 +64,12 @@ enum {
     W_SLIDER = W_DIFF + 3, W_EXIT, W_START, W_DLG_L, W_DLG_R, W_XYES, W_XNO, W_ANY
 };
 enum { EX_CLOSED, EX_OPENING, EX_OPEN, EX_CLOSING };
-#define EX_FRAMES 4
-#define EX_TICKS 5
+#define EX_STEPS 6            /* the flap sequences have 6 steps of 100 ms (DT.EXE 0x4056a5) */
+#define EX_TICKS (MENU_TICK_HZ / 10)
+#define SQ_TICKS (MENU_TICK_HZ / 5)   /* the square flip-books advance one frame per 200 ms */
+/* bitmap shown at each step: EXIT pressed (opening), NO pressed (closing) */
+static const int EX_OPEN_SEQ[EX_STEPS] = {134, 135, 136, 138, 137, 138};
+static const int EX_CLOSE_SEQ[EX_STEPS] = {136, 135, 134, 133, 133, 132};
 
 struct Menu {
     PeImage img[B_MAXID];
@@ -81,6 +87,7 @@ struct Menu {
     char    msg[64];
     char    edit[MENU_NAME_MAX + 1];
     int     exit_state, exit_t;
+    int     sqf[2][3], sq_t;         /* square flip-book frame (0..2) and its tick counter */
     unsigned about_t;
     int     list_row;                /* hovered row (set by update) */
 };
@@ -215,6 +222,10 @@ static void load_pilot(Menu *m, int i)
 {
     m->cur = i;
     save_load(&m->sv, m->path, i >= 0 ? m->names[i] : "");
+    for (int i2 = 0; i2 < 3; i2++) {                /* the squares snap to the loaded pilot's choice */
+        m->sqf[0][i2] = m->sv.quality == i2 ? 2 : 0;
+        m->sqf[1][i2] = m->sv.difficulty == i2 ? 2 : 0;
+    }
 }
 
 static void select_pilot(Menu *m, int i)
@@ -283,8 +294,8 @@ static void key_rim(PeImage *im)
 }
 
 static const int NEEDED[] = {104, 105, 110, 111, 112, 117, 118, 119, 120, 121, 122, 123, 124, 125, 129, 130, 131, 132, 133, 134,
-                             136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
-                             154, 155, 157, 158, 159, 161, 162, 163, 164, 170, 171, 172, 173, 174, 175, 176, 177, 178,
+                             135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
+                             126, 127, 128, 154, 155, 157, 158, 159, 166, 170, 171, 172, 173, 174, 175, 176, 177, 178,
                              179, 182};
 
 Menu *menu_create(const uint8_t *dt_exe, size_t n, const char *save_path)
@@ -298,7 +309,8 @@ Menu *menu_create(const uint8_t *dt_exe, size_t n, const char *save_path)
         PeImage *im = &m->img[id];                 /* navy (0,0,128) is the transparent key (docs §6) */
         for (int k = 0; k < im->w * im->h; k++)
             if ((im->px[k] & 0xFFFFFFu) == 0x000080u) im->px[k] = 0;
-        if (id >= B_SQ_SEL && id < B_SQ_SEL + 3) key_rim(im);
+        if ((id >= B_SQ_D_MID && id < B_SQ_D_MID + 3) || (id >= B_SQ_D_LIT && id < B_SQ_D_LIT + 3) ||
+            (id >= B_SQ_Q_MID && id < B_SQ_Q_MID + 3) || (id >= B_SQ_Q_LIT && id < B_SQ_Q_LIT + 3)) key_rim(im);
     }
     if (!m->img[B_PANEL].px || m->img[B_PANEL].w != MENU_W || m->img[B_PANEL].h != MENU_H) { menu_free(m); return NULL; }
     if (save_path)
@@ -415,7 +427,7 @@ static void trigger(Menu *m, int w, int row, MenuResult *res)
     case W_CAL: break;    /* the original runs the Windows joystick control panel; platform business, a no-op here */
     case W_FLIP: m->sv.flip = !m->sv.flip; break;
     case W_EXIT: m->exit_state = EX_OPENING; m->exit_t = 0; break;
-    case W_XNO: m->exit_state = EX_CLOSING; m->exit_t = EX_FRAMES * EX_TICKS; break;
+    case W_XNO: m->exit_state = EX_CLOSING; m->exit_t = 0; break;
     case W_XYES: persist(m); res->action = MENU_QUIT; fill_result(m, res); break;
     case W_START:
         if (m->cur < 0) { m->modal = MD_NEEDPILOT; break; }
@@ -451,8 +463,20 @@ MenuResult menu_update(Menu *m, const MenuInput *in)
     m->mx = in->x; m->my = in->y; m->down = in->down;
     if (m->modal == MD_ABOUT) m->about_t++;
     /* EXIT flap animation */
-    if (m->exit_state == EX_OPENING && ++m->exit_t >= EX_FRAMES * EX_TICKS) m->exit_state = EX_OPEN;
-    else if (m->exit_state == EX_CLOSING && --m->exit_t <= 0) m->exit_state = EX_CLOSED;
+    if (m->exit_state == EX_OPENING && ++m->exit_t >= EX_STEPS * EX_TICKS) m->exit_state = EX_OPEN;
+    else if (m->exit_state == EX_CLOSING && ++m->exit_t >= EX_STEPS * EX_TICKS) m->exit_state = EX_CLOSED;
+    /* I/II/III flip-books: step one frame per 200 ms toward lit (selected) or idle */
+    if (++m->sq_t >= SQ_TICKS) {
+        m->sq_t = 0;
+        for (int row = 0; row < 2; row++)
+            for (int i = 0; i < 3; i++) {
+                int tgt = (row ? m->sv.difficulty : m->sv.quality) == i ? 2 : 0;
+                int w = (row ? W_DIFF : W_QUAL) + i;
+                if (m->down && m->active == w && pick(m, m->mx, m->my, NULL) == w) tgt = tgt ? 0 : 2;
+                if (m->sqf[row][i] < tgt) m->sqf[row][i]++;
+                else if (m->sqf[row][i] > tgt) m->sqf[row][i]--;
+            }
+    }
 
     /* keyboard */
     if (in->text && m->modal == MD_ADD) {
@@ -652,20 +676,12 @@ void menu_draw(const Menu *m, uint32_t *dst)
     blit(dst, I(m, m->sv.flip ? B_FLIP_ON : B_FLIP_OFF), 133, 246);
     if (pressed == W_FLIP && hover == W_FLIP) blit(dst, I(m, B_FLIP_P), 133, 246);
 
-    /* radio rows: selected = lit set, hover = green, pressed = brighter green */
+    /* radio rows: flip-book per square (frame 0 = the idle panel, 1 = mid sprite, 2 = lit sprite) */
     for (int row = 0; row < 2; row++) {
-        int sel = row ? m->sv.difficulty : m->sv.quality;
         for (int i = 0; i < 3; i++) {
-            int w = (row ? W_DIFF : W_QUAL) + i;
-            Rect r = sq_rect(row, i);
-            int dx = 0, dy = 0;
-            int id = -1;
-            if (pressed == w && hover == w) { id = B_SQ_PRS + i; dx = 2; }
-            else if (hover == w) { id = B_SQ_HOV + i; dx = 1; }
-            else if (sel == i) { id = B_SQ_SEL + i; dx = i ? -3 : -2; dy = -4; }
-            /* the sprite sets draw their bevel at different offsets inside the 70x70 (bevel edge vs the idle
-             * panel's, found by matching against bmp105; see sq_rect for the idle bevel origin) */
-            if (id >= 0) blit(dst, I(m, id), r.x + dx, r.y + dy);
+            int f = m->sqf[row][i];
+            if (f > 0) blit(dst, I(m, (f == 1 ? (row ? B_SQ_D_MID : B_SQ_Q_MID) : (row ? B_SQ_D_LIT : B_SQ_Q_LIT)) + i),
+                            291 + i * SQ_DX, row ? 227 : 138);
         }
     }
 
@@ -680,20 +696,16 @@ void menu_draw(const Menu *m, uint32_t *dst)
         blit(dst, I(m, B_KNOB), KNOB_X, KNOB_Y0 + off);
     }
 
-    /* START: glow cycle on hover, flash while pressed */
+    /* START: pressed look while the button is held (the 161..164 glow plays only after the click) */
     if (pressed == W_START && hover == W_START) blit(dst, I(m, B_START_PRS), 369, 303);
-    else if (hover == W_START) {
-        static const int seq[4] = {0, 1, 2, 1};
-        blit(dst, I(m, B_START_HOV + seq[(m->tick / 6) % 4]), 369, 303);
-    }
 
     /* EXIT flap */
     if (m->exit_state == EX_CLOSED) {
         if (hover == W_EXIT) blit(dst, I(m, pressed == W_EXIT ? B_EXIT_P : B_EXIT_N), 121, 293);
     } else {
-        static const int fr[EX_FRAMES] = {B_EXIT_A, B_EXIT_B, B_EXIT_C, B_EXIT_D};
-        int f = m->exit_state == EX_OPEN ? EX_FRAMES - 1 : clampi(m->exit_t / EX_TICKS, 0, EX_FRAMES - 1);
-        const PeImage *im = I(m, fr[f]);
+        int st = clampi(m->exit_t / EX_TICKS, 0, EX_STEPS - 1);
+        int fid = m->exit_state == EX_OPEN ? B_EXIT_D : m->exit_state == EX_OPENING ? EX_OPEN_SEQ[st] : EX_CLOSE_SEQ[st];
+        const PeImage *im = I(m, fid);
         if (im && im->px) blit(dst, im, EXF_X, EXF_Y + 259 - im->h);
         if (m->exit_state == EX_OPEN) {
             if (hover == W_XNO) blit(dst, I(m, B_NO_H), x_no().x, x_no().y);

@@ -195,14 +195,14 @@ UI click/hover/exit sounds, M) were listed but not extracted.
 | 131, 151, 157 | 123x37-39 | MOUSE selected (blue), hover (green), bright variant |
 | 130, 150, 182 | 123x37 | JOYSTICK selected, hover, dim (no joystick) |
 | 119, 141, 153 | 113x31-32 | CALIBRATE normal, hover, disabled |
-| 121-123, 126-128, 142-144, 147-149 | 70x70 | the I / II / III square buttons in four state sets (normal, dim, lit, hover); the same art serves both radio rows (state-to-set mapping is not decoded, L) |
+| 121-123, 126-128, 142-144, 147-149 | 70x70 | the I / II / III square buttons in four state sets (normal, dim, lit, hover); mapping decoded in §7b (H): GRAPHIC QUALITY row uses 126-128 (mid) and 147-149 (lit), DIFFICULTY row 121-123 (mid) and 142-144 (lit) |
 | 125, 145, 146 | 34x36 | FLIP DIRECTION toggle states (red square, yellow-red W, black-red M) |
 | 124, 155 | 19x22 | pilot drop-down arrow, normal and pressed |
-| 132, 133, 134 | ~153x160 | EXIT flap: closed, opening, open (animation frames) |
+| 132, 133, 134 | ~153x160 | EXIT flap frames; with 135-138 they are the seven sprites of the flap sequence (§7b) |
 | 135-138 | ~156x255 | "ARE YOU SURE?" flap frames with the red YES button and small NO |
 | 139, 140 | 74x23, 149x123 | NO button, YES cap |
-| 161-166 | 151x142 | START round button, six animation frames (idle, glow, bright flash, ...) |
-| 111-116 | 151x142 | CONTINUE button, same six frames |
+| 161-164, 166 | 151x142 | START: 161-164 are the four frames of the post-click flip-book, 166 is the pressed look of the button (165 is not referenced by DT.EXE) (§7b) |
+| 112-115, 111, 116 | 151x142 | CONTINUE: 112-115 flip-book, 116 pressed look, 111 its idle frame (§7b) |
 | 158, 159, 160 | 25x65, 30x14, 33x18 | volume meter fill, slider knob, knob shadow/mask |
 | 215 | 81x118 | VOLUME panel overlay |
 | 172, 179 | 273x115 | "PILOT REGISTRATION:" dialog background; delete-confirm background |
@@ -210,7 +210,7 @@ UI click/hover/exit sounds, M) were listed but not extracted.
 | 106-109 | 5x5 to 15x15 | tiny indicator bitmaps (L, probably LED or cursor masks) |
 
 **Layout** (pixels in the 640x480 picture; read off the bitmap, +-5 px except where marked H, exact sprite offsets are
-in the layout code at 0x402c90 / 0x4027b8 and were not decoded):
+in the layout code at 0x402c90 / 0x4027b8 / 0x403273; the 12-byte sprite-table entries and the placement coordinates are filled in by static initialisers (0x403f60, 0x404754, 0x4046ae) that Ghidra left undecompiled, now read, see §7b):
 
 | element | x, y | size |
 |---|---|---|
@@ -237,14 +237,13 @@ everything else can be the original bitmaps if rights allow, otherwise redrawn.
 
 ## 7. Unknowns
 
-* How START chooses the 6 animation frames and their timing, and the I/II/III state-set assignment: the sprite
-  classes (vtable at 0x427518 and friends) were not decompiled. Timer 100 ms is used only by the disc dialog.
-* Exact sprite coordinates; only the pilot field (126,65,245x12 rows) is confirmed from the code.
+* (closed, see §7b) START/CONTINUE animation, I/II/III state sets, EXIT flap timing.
+* Sprite coordinates: the I/II/III squares, MOUSE/JOYSTICK/FLIP/ABOUT are now exact (§7b); the rest are still read off the bitmap.
 * (closed) The "Product ID" string: the ABOUT builder (0x4142f5) calls 0x411349, which reads the REG_SZ value `PID`
   (up to 100 chars) from the launcher's product registry key (the same key that holds `CurrentPlayer`, opened by 0x4118fb). Only if the value
   is absent or not a string does it fall back to the template `xxxxx-xxx-xxxxxxx`. Nothing in DT.EXE writes `PID`; it is presumably
   written by SETUP.EXE (M, SETUP not checked).
-* Whether GRAPHIC QUALITY alone triggers the restart prompt. The handler 0x405436 is an on-change method of a radio-group class (vtable 0x427100, slots 0x4053eb and 0x405436): when the selection differs from the stored one and the player window exists (0x415900), it asks the restart question (0x415923) and on Cancel puts the previous value back. Which group objects use that class (quality only, or difficulty too) was not decided: its constructor (about 0x4043e3) is not in the Ghidra export (**unresolvable statically from the export; a disassembly of the constructor would settle it**).
+* (closed, see §7b) Which group triggers the restart prompt: GRAPHIC QUALITY only (H).
 * Which of the 27 WAVE resources plays on which event.
 * Behaviour of `RegDeleteKey` on names with `\`, and any name filtering in the edit box subclass at 0x408bcd.
 * (closed, see §7a) `GraphicQuality` index versus the video mode.
@@ -272,3 +271,55 @@ Typical result on a card with everything available: quality 0 (I) = 0x3f9 (320x2
 0x3f8 / 0x3f6 when 320x240x8 is missing); if no usable mode exists the picker returns 0 and the game fails to start. The
 render buffer is always 320x200; the mode only changes the presentation size and the pixel depth (`g_bpp`). All 640x480 modes carry a 40-row border (field 0x421558 = 0x28, 0x14 for 320x240), and the flag at 0x421588 only selects which back-buffer creation path `DD_Init` takes (1 = system-memory surface plus a lock pointer, 0 = plain surface); its exact role in presentation was not traced (L). Our engine ignores
 `GraphicQuality` and always renders to a window, which is a deliberate simplification.
+
+## 7b. Sprite button classes (recovered from the undecompiled constructors and static initialisers, DT.EXE)
+
+Ghidra had not made functions of the static initialisers 0x403f60 / 0x404754 / 0x4046ae and of many vtable slots; they were
+created with a headless script (tools/ghidra/ExportDecomp.java style) and read. All of this is H unless marked.
+
+**Widget model.** Every button is a "flip-book": a list of frames added with the sprite-add virtual call (slot +0x20), a current
+frame, a target frame and a tick sink that moves the current frame one step toward the target whenever 200 ms have passed
+(constructor default 200 at +0x44 of the 0xb0-byte toggle class, +0x58 of the 0x8c-byte container class). Setting a frame (slot
+0x40bef1 / 0x41a8d2) sets the target and the direction. The visibility virtual (+0x14) takes **1 = hide, 0 = show**.
+Each sprite table entry is 12 bytes (bitmap id, x, y); an id of 0xffff in slot 0 means "capture the panel background (bmp105)
+at the button rectangle as frame 0", so frame 0 is the idle look and is the panel itself.
+
+**I/II/III squares** (toggle class, ctor 0x40ae50, tables at 0x42d2b8, placement 0x42cf38): three frames, 0 = idle (panel),
+1 = mid sprite, 2 = lit sprite. Quality row (y 138): 126+i then 147+i; difficulty row (y 227): 121+i then 142+i; x = 291, 363,
+435; sprites drawn at exactly that origin. Selecting animates 0 -> 1 -> 2 (400 ms), deselecting 2 -> 1 -> 0. Mouse-down on a
+button immediately sets the target to the opposite of its current state (frame 2 if idle, 0 if lit) and the mouse-up commits it
+(0x40b9ad / 0x40bb5a). There is no separate hover frame; the former "hover/dim" sets are just the mid and lit frames. The other
+toggles use the same class: JOYSTICK 130 (idle) / 150, MOUSE 131 / 151 with idle 157 as frame 0 and JOYSTICK frame 0 captured,
+FLIP 125 / 146 with frame 0 = 145 at (133,246), ABOUT 117 at (412,65), all pairs (mid, lit). Placement (H): MOUSE (133,138),
+JOYSTICK (133,177), FLIP (133,246), ABOUT (412,65).
+
+**Radio groups** (0x40225c): group 1 = the three quality squares (listener object 0x42cfb8, vtable 0x427108), group 2 = the
+three difficulty squares (no listener), group 3 = MOUSE and JOYSTICK (listener 0x42cf2c, vtable 0x427100, slot 0x4053eb: enables
+CALIBRATE when the selection is 1 = JOYSTICK). FLIP is a plain checkbox.
+
+**Restart prompt.** The handler 0x405436 belongs to the listener of group 1, so it is **GRAPHIC QUALITY only**; the selection at
+launcher start is stored in 0x42cfbc, and a change while the player window exists (0x415900) asks the restart question (0x415923);
+Cancel restores the old selection. DIFFICULTY, controls and volume never prompt (they are re-read on WM_ACTIVATEAPP, SCENE_GRAPH
+section 8).
+
+**START and CONTINUE.** The text-button class (0xa8 bytes, ctor 0x409f42) has two frames: START 0 = panel, 1 = bmp166 pressed;
+CONTINUE 0 = bmp111, 1 = bmp116 (both at (387,318)). Visibility (0x401f73): when the player window exists CONTINUE is shown
+and START hidden, otherwise the reverse. On the click the launcher hides the button, starts the game
+(0x405e5a: WinExec of the player, or SetForegroundWindow on an existing player window) and a full-window timer object (0x54 bytes,
+ctor 0x40da8f, 3000 ms) runs; when it expires (0x405f0d) the matching 0x8c-byte container (START: frames 161-164, CONTINUE:
+112-115, 200 ms per frame, ctor 0x419c67) is shown and set to its last frame, so it plays 161 -> 162 -> 163 -> 164 (600 ms,
+M for the exact trigger) and rests on the bright frame 164 / 115. There is no hover animation; hover and glow cycling in the
+engine were guesses. bmp165 is not used.
+
+**EXIT flap** (0x405547 button handler, 0x4056a5 tick every >= 100 ms, six steps, then a final step). The seven sprites are
+bmp132..138 in that order (index 0..6); a step shows one sprite and hides the previous one. *EXIT pressed* (mode 1): all seven
+are hidden, then 134, 135, 136, 138, 137, 138 at 100 ms each, then the ARE YOU SURE content (panel 0x42d000 with YES and NO)
+is shown. *NO pressed* (mode 0): the content is hidden and the flap goes back 136, 135, 134, 133, 133, 132 at 100 ms each,
+ending on the idle (closed) panel. YES calls DestroyWindow on the launcher. Whether the hold frame is 138 or the panel itself
+is M.
+
+**Unresolved / L.** The exact z-order and rectangle of the flap sprites (the engine bottom-aligns them, M), and which event
+resets the START/CONTINUE flip-book to frame 0 (the container is created at frame 0, M).
+
+**DTPLAYER.EXE.** The same headless pass over DTPLAYER.EXE created 23 more functions, all CRT stubs, thunks and destructors;
+no restart-prompt sprite group exists in the player (the prompt is the launcher's, above), so that item is closed.

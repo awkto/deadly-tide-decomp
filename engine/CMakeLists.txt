@@ -38,7 +38,7 @@ if(NOT DT_PLATFORM_SRC)
 endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
-add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c)
+add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c src/peres.c)
 target_include_directories(dtcore PUBLIC src)
 if(NOT MSVC)
   target_link_libraries(dtcore PUBLIC m)
@@ -58,6 +58,16 @@ target_compile_options(deadlytide PRIVATE ${DT_WARN})
 if(MSVC)   # fopen etc. are fine; the _s variants are not portable C11
   target_compile_definitions(dtcore PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_compile_definitions(deadlytide PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# Dev tool: dump a PE file's RT_BITMAP resources as PPM (not built for the browser).
+if(NOT EMSCRIPTEN)
+  add_executable(peres_dump tools/peres_dump.c)
+  target_link_libraries(peres_dump PRIVATE dtcore)
+  target_compile_options(peres_dump PRIVATE ${DT_WARN})
+  if(MSVC)
+    target_compile_definitions(peres_dump PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
 endif()
 
 if(EMSCRIPTEN)

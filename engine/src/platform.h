@@ -85,4 +85,12 @@ int  plat_is_up(void);
 /* Per-user writable directory for the save file, ending in a path separator ("" if none). */
 const char *plat_user_dir(void);
 
+/* ---- First-run helpers (native build) ---- */
+/* Folder of the executable, with a trailing separator ("" if unknown). */
+const char *plat_base_dir(void);
+/* Modal message box (works before plat_init). */
+void plat_message(const char *title, const char *text);
+/* Native "choose folder" dialog; blocks (pumping events) until answered. 1 = chosen, written to out. */
+int  plat_choose_folder(const char *start, char *out, size_t n);
+
 #endif

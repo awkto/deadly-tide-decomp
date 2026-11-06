@@ -88,3 +88,8 @@ int plat_find_file(const char *dir, const char *name, char *out, size_t n)
     (void)dir; (void)name; (void)out; (void)n;
     return 0;
 }
+
+/* No dialogs in the headless build. */
+const char *plat_base_dir(void) { return ""; }
+void plat_message(const char *title, const char *text) { fprintf(stderr, "%s\n%s\n", title, text); }
+int plat_choose_folder(const char *start, char *out, size_t n) { (void)start; (void)out; (void)n; return 0; }

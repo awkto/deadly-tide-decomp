@@ -457,3 +457,45 @@ int plat_find_file(const char *dir, const char *name, char *out, size_t n)
     SDL_EnumerateDirectory(dir, find_cb, &f);
     return f.found;
 }
+
+const char *plat_base_dir(void)
+{
+    const char *b = SDL_GetBasePath();   /* owned by SDL, ends in a separator */
+    return b ? b : "";
+}
+
+void plat_message(const char *title, const char *text)
+{
+    if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, title, text, NULL))
+        fprintf(stderr, "%s\n%s\n", title, text);   /* no GUI: at least say it on the console */
+}
+
+#ifndef __EMSCRIPTEN__
+typedef struct { volatile int done; int ok; char path[1024]; } DirPick;
+
+static void SDLCALL dir_cb(void *ud, const char *const *list, int filter)
+{
+    (void)filter;
+    DirPick *d = ud;
+    if (list && list[0]) { SDL_strlcpy(d->path, list[0], sizeof d->path); d->ok = 1; }
+    d->done = 1;
+}
+
+int plat_choose_folder(const char *start, char *out, size_t n)
+{
+    static DirPick d;
+    SDL_zero(d);
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return 0;
+    SDL_ShowOpenFolderDialog(dir_cb, &d, NULL, start && start[0] ? start : NULL, false);
+    Uint64 t0 = SDL_GetTicks();
+    while (!d.done && SDL_GetTicks() - t0 < 30u * 60u * 1000u) {
+        SDL_PumpEvents();
+        SDL_Delay(20);
+    }
+    if (!d.done) return 0;
+    if (d.ok) SDL_strlcpy(out, d.path, n);
+    return d.ok;
+}
+#else
+int plat_choose_folder(const char *start, char *out, size_t n) { (void)start; (void)out; (void)n; return 0; }
+#endif

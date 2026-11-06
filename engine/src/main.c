@@ -368,6 +368,73 @@ static int play(const ChainOpts *co, int scale, long max_frames, int pace)
     return play_finish(&p);
 }
 
+/* ---- First run: find the game data without --data ---------------------------------------
+ * Order: remembered folder (datadir.txt in the user dir), the executable's folder, the current
+ * directory; else explain and ask with a folder dialog (--choose-data forces it). */
+static int dir_has_data(const char *dir)
+{
+    static const char *subs[] = { "", "cd1/", "cd2/", "cd3/", "cd4/" };
+    static const char *names[] = { "LOGOS.L96", "LEVEL01.L96" };
+    char p[1100];
+    for (size_t i = 0; i < sizeof subs / sizeof *subs; i++)
+        for (size_t j = 0; j < sizeof names / sizeof *names; j++) {
+            snprintf(p, sizeof p, "%s/%s%s", dir, subs[i], names[j]);
+            if (l96_exists(p)) return 1;
+        }
+    return 0;
+}
+
+static void conf_path(char *out, size_t n) { snprintf(out, n, "%sdatadir.txt", plat_user_dir()); }
+
+static int conf_load(char *out, size_t n)
+{
+    char p[1100];
+    conf_path(p, sizeof p);
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    size_t k = fread(out, 1, n - 1, f);
+    fclose(f);
+    out[k] = 0;
+    while (k && (out[k - 1] == '\n' || out[k - 1] == '\r' || out[k - 1] == ' ')) out[--k] = 0;
+    return k > 0;
+}
+
+static void conf_save(const char *dir)
+{
+    char p[1100];
+    conf_path(p, sizeof p);
+    FILE *f = fopen(p, "wb");
+    if (!f) { fprintf(stderr, "warning: cannot remember the data folder in %s\n", p); return; }
+    fprintf(f, "%s\n", dir);
+    fclose(f);
+}
+
+/* Fills out with a folder that has game data; 0 = none (user quit or no dialog). */
+static int resolve_data(char *out, size_t n, int force_choose, int interactive)
+{
+    if (!force_choose) {
+        if (conf_load(out, n) && dir_has_data(out)) return 1;
+        snprintf(out, n, "%s", plat_base_dir());
+        if (out[0] && dir_has_data(out)) return 1;
+        snprintf(out, n, ".");
+        if (dir_has_data(out)) return 1;
+    }
+    if (!interactive) return 0;
+    if (!force_choose)
+        plat_message("Deadly Tide - game files needed",
+            "Deadly Tide needs the game files from your original CDs.\n\n"
+            "Copy all the .L96 files and DT.EXE from the 4 CDs into one folder (or keep the CDs as "
+            "cd1, cd2, cd3 and cd4 subfolders), then pick that folder on the next screen.\n\n"
+            "The choice is remembered for next time.");
+    for (;;) {
+        if (!plat_choose_folder(plat_base_dir(), out, n)) return 0;
+        if (dir_has_data(out)) { conf_save(out); return 1; }
+        plat_message("Deadly Tide - not the right folder",
+            "No game files (LOGOS.L96 or LEVEL01.L96) were found in that folder or its cd1..cd4 "
+            "subfolders.\n\nYou will be asked to pick a folder again; close the dialog to quit.");
+    }
+}
+
 /* ---- Launcher screen (native windowed build) ---------------------------------------------
  * The original DT.EXE launcher ("Pilot Control Center", docs/LAUNCHER.md) is drawn by menu.c at
  * 640x480; START applies the pilot's settings and plays the game, which returns to the menu when
@@ -484,12 +551,14 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
 static void usage(void)
 {
     fprintf(stderr,
-        "usage: deadlytide --data DIR --level LEVEL01 [--from-seg N] [options]   play the scene chain\n"
+        "usage: deadlytide [--data DIR] --level LEVEL01 [--from-seg N] [options]   play the scene chain\n"
         "       deadlytide --data DIR --file NAME.L96 --segment N [options]      play one segment\n"
         "options:\n"
         "  --menu             show the launcher screen (needs DT.EXE in DIR or DIR/cd1); default when no\n"
         "                     --level/--file/--demo and DT.EXE is found\n"
         "  --no-menu          never show the launcher screen\n"
+        "  --choose-data      pick the game folder with a dialog (remembered for later runs); without --data\n"
+        "                     the folder is the remembered one, else the exe's folder, else the current dir\n"
         "  --scale S          window scale (default 3)\n"
         "  --count N          stop after N ticks (1/15 s each)\n"
         "  --dump-frames DIR  headless: write composited frames as PPM\n"
@@ -527,9 +596,10 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-    const char *data = ".", *file = NULL, *level = NULL, *dump = NULL;
+    char data_buf[1100] = ".";
+    const char *data = data_buf, *file = NULL, *level = NULL, *dump = NULL;
     int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, auto_look = 0;
-    int fullscreen = 0;
+    int fullscreen = 0, data_given = 0, choose_data = 0;
     int menu_flag = 0;   /* 1 --menu, -1 --no-menu */
     int hub_between = 0, set_highest = -1, set_sp = -1, diff_given = 0;
     const char *save_path = NULL, *pilot = "Player";
@@ -539,7 +609,8 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         int more = i + 1 < argc;
-        if (!strcmp(a, "--data") && more) data = argv[++i];
+        if (!strcmp(a, "--data") && more) { snprintf(data_buf, sizeof data_buf, "%s", argv[++i]); data_given = 1; }
+        else if (!strcmp(a, "--choose-data")) choose_data = 1;
         else if (!strcmp(a, "--file") && more) file = argv[++i];
         else if (!strcmp(a, "--level") && more) level = argv[++i];
         else if ((!strcmp(a, "--segment") || !strcmp(a, "--from-seg")) && more) seg = atoi(argv[++i]);
@@ -578,6 +649,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
+    /* No --data: remembered folder / next to the exe / current dir / ask (windowed runs only). */
+    if (!data_given) {
+        int ask = !dump && !headless;
+        if (!resolve_data(data_buf, sizeof data_buf, choose_data && ask, ask)) {
+            if (ask) { fprintf(stderr, "no game data folder chosen; use --data DIR\n"); return 1; }
+            snprintf(data_buf, sizeof data_buf, ".");
+        }
+    }
     if (fullscreen) plat_set_fullscreen(1);   /* applied when the window opens */
     /* Launcher screen: windowed, no explicit level/file/demo. */
     char dt_exe[1100] = "";
@@ -585,7 +664,10 @@ int main(int argc, char **argv)
     if (menu_flag >= 0 && !file && !level && !g_cx.demo && !dump && !headless) {
         if (find_dt_exe(data, dt_exe, sizeof dt_exe)) want_menu = 1;
         else if (menu_flag > 0) { fprintf(stderr, "--menu: DT.EXE not found in %s or %s/cd1\n", data, data); return 1; }
-        else fprintf(stderr, "note: DT.EXE not found in %s (no launcher screen); give --level or --file\n", data);
+        else {
+            fprintf(stderr, "note: DT.EXE not found in %s (no launcher screen); starting at LOGOS\n", data);
+            level = "LOGOS";
+        }
     } else if (menu_flag > 0) {
         fprintf(stderr, "--menu cannot be combined with --level/--file/--demo/--headless/--dump-frames\n");
         return 2;

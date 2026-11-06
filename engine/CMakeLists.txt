@@ -38,7 +38,7 @@ if(NOT DT_PLATFORM_SRC)
 endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
-add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c src/peres.c)
+add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c src/peres.c src/menu.c)
 target_include_directories(dtcore PUBLIC src)
 if(NOT MSVC)
   target_link_libraries(dtcore PUBLIC m)
@@ -67,6 +67,16 @@ if(NOT EMSCRIPTEN)
   target_compile_options(peres_dump PRIVATE ${DT_WARN})
   if(MSVC)
     target_compile_definitions(peres_dump PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
+endif()
+
+# Dev tool: scripted headless run of the launcher screen (menu.c), dumps PPM frames.
+if(NOT EMSCRIPTEN)
+  add_executable(menu_test tools/menu_test.c)
+  target_link_libraries(menu_test PRIVATE dtcore)
+  target_compile_options(menu_test PRIVATE ${DT_WARN})
+  if(MSVC)
+    target_compile_definitions(menu_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   endif()
 endif()
 

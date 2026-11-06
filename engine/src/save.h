@@ -23,11 +23,26 @@ typedef struct {
     int  save_point;          /* 0..1000, segment index in the frontier level */
     int  act_num;             /* 0..7, ACT charges at the save point */
     int  difficulty;          /* registry DifficultyLevel 0..2 (1 = default) */
+    /* launcher settings, per pilot like the original (docs/LAUNCHER.md §3) */
+    int  quality;             /* GraphicQuality 0..2 (default 2) */
+    int  use_joystick;        /* UseJoystick 0/1 (default 0) */
+    int  flip;                /* FlipControl 0/1 (default 0) */
+    int  volume;              /* Volume 0..255 (default 128) */
 } SaveData;
 
 /* Load `pilot` from `path` (missing file / section / key -> defaults). path may be NULL. */
 void save_load(SaveData *s, const char *path, const char *pilot);
-/* Rewrite the file with this pilot's section replaced (other pilots kept). 0 = ok. */
+/* Rewrite the file with this pilot's section replaced (other pilots kept). 0 = ok.
+ * Original quirk (LAUNCHER.md §3): the pilot "Poseidon" (any case) is saved with HighestLevel 20. */
 int  save_store(const SaveData *s);
+
+/* Pilot list: names of all [pilot X] sections, sorted case-insensitively, unique, at most `max`.
+ * Returns the count (0 if the file is missing). */
+int  save_list_pilots(const char *path, char names[][64], int max);
+/* Remove a pilot's section (progress included, like RegDeleteKey). 0 = ok (also if absent). */
+int  save_delete_pilot(const char *path, const char *pilot);
+/* The "current pilot" global key (registry CurrentPlayer). get: "" if unset; returns length. */
+int  save_get_current(const char *path, char *out, int n);
+int  save_set_current(const char *path, const char *pilot);
 
 #endif

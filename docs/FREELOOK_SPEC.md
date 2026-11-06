@@ -84,7 +84,7 @@ carry sectors of entries 0, 1).
 | 0x21 `look_mode` | control sub-mode (§5). Shipped: mode 1 = LEVEL00 hub only; mode 2 = LEVEL01/05/10/11/12; mode 3 = LEVEL02/03/04/07/14/15. Modes 4 and 0 are unused |
 | 0x4a `half_fov` | half FOV in 1/512° (`tan(v·π/92160)`, const 0x420020). LEVEL00: 19200 = 37.5°; LEVEL01: 19788 / 15360 |
 | prev seg 0x18/0x1a/0x46 | entry yaw / pitch / roll (from the segment **before**) → `View_Set` 0x40e1d0 in 0x407bf0 |
-| target seg 0x1c/0x1e/0x48 | exit yaw / pitch / **roll** that the auto-turn steers to. 0x48 is read by the mode-2/3 planner 0x40f1c0 (it is 0 in every shipped type-6 target) |
+| target seg 0x1c/0x1e/0x48 | exit yaw / pitch / **roll** that the auto-turn steers to. 0x48 is read by the mode-2/3 planner 0x40f1c0 (at 0x40f341). It is 0 in every shipped type-6 target, but nonzero on the rail segments that a type-6 segment hands over to (LEVEL01 8→9 and 12→13, LEVEL02 10→11 etc.; SCENE_GRAPH §1), where the roll is used. H |
 | 0x16/0x17, 0x5c | hotspot records / choice start frame (SCENE_GRAPH §2, §5) |
 
 ## 2. Geometry and projection

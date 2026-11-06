@@ -187,7 +187,10 @@ The payload is `count` × 0x58 frame descriptors (the record layout of §3.2: +4
 **relative to the payload start**, +8 size, +0x10 x, y, w, h, +0x18 bbox, +0x48 tint), followed by
 the RLE data. The engine keeps a 0x110-byte set entry: +4 size hint, +0xc count,
 +0x10 pre-expanded flag, +0x14 frame-descriptor pointers. For type 3 a small table of power-of-two
-steps at +0x90 is filled from the count; its use is not traced.
+steps at +0x90 is filled from the count (S[0] = 0, S[i] = S[i−1] + 2^(m+1−i) for m frames). It is the
+perspective-like scale of the type-3 animations: `Hud_DrawACT` 0x4169f0 draws frame k at S[k]/(2^(m+1)−1) of the way
+from the screen centre to the shot point, and `Hud_DrawGunFlash` 0x416610 interpolates the gun-shot streak between
+S[k] and S[k+1] (COMBAT_SPEC §5.4). H.
 
 **"Compressed" (negative type) sets** are stored with the same RLE. `Sprites_ExpandSet` 0x402600
 decodes each frame at load into a raw `w·h` bitmap (zero = transparent). It does this by calling the

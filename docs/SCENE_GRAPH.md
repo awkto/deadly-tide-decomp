@@ -22,9 +22,9 @@ its `rec[0x15]` is byte 0x54 and `rec[0x17]` is the short at 0x5c).
 | 0x0c | i16 | first | first stream-index entry | 0x401650, 0x406020 |
 | 0x0e | i8 | **next** | default successor. Negative means leave the level and load linked name `names[-1-next]` | 0x401650, `Branch_Resolve` 0x40e380 (its fallback) |
 | 0x0f | u8 | count | number of stream-index entries (groups of 5 frames, 1/3 s each) | 0x401650 |
-| 0x10, 0x11 | u8 | ? | 0xff/0xff on type-0 segments; 0/1 (0x11 sometimes 3) on gameplay segments. No reader found | — |
+| 0x10, 0x11 | u8 | ? | SFX ids: 0x10 = primary gun shot, 0x11 = ACT launch (0xff = none; 0/1 etc. on gameplay segments). Read by `Sfx_WeaponFire` 0x417ca0 (H; COMBAT_SPEC §0) | 0x417ca0 |
 | 0x12 | u8 | weapon | gun routine 0..5 | `Weapon_Fire` 0x416460, 0x4043f0 |
-| 0x14 | u8 | ? | 0xff, 2 or 5. No reader found | — |
+| 0x14 | u8 | ? | SFX id played when the player dies (0xff = none). Read by `Sfx_PlayerDeath` 0x417d40 (H; COMBAT_SPEC §0) | 0x417d40 |
 | 0x16 | u8 | hs_first | first record in table44 (the hotspot / branch table) | 0x40df80, 0x40e380, 0x40e7f0 |
 | 0x17 | u8 | **hs_count** | number of hotspot records; 0 = no alternatives | same |
 | 0x18 | i16 | entry_yaw | read from the segment **before** a type-2/6 segment. It gives the starting yaw of the panorama or free-look (for type 2 it is also the yaw offset `g_panoYawOffset`) | 0x406020 → 0x4071e0 / 0x407bf0 |
@@ -35,12 +35,12 @@ its `rec[0x15]` is byte 0x54 and `rec[0x17]` is the short at 0x5c).
 | 0x22 | i8 | **esc_target** | ESC skip target, see §4 | `Key_Skip` 0x414130 |
 | 0x23 | i8 | **death** | segment to branch to when health reaches 0 | `Hud_Draw` 0x409e20 |
 | 0x2c | u32 | pano_limits | type 2: nonzero = take yaw/pitch limits from the panorama header | `Pano_SceneSetup` 0x412780 |
-| 0x34 | u32 | — | always 0x115 in the files; the engine also writes 0x115 here when it enters a type-2 segment | 0x406020 |
+| 0x34 | u32 | — | always 0x115 in every shipped file (checked on all levels). The engine writes 0x115 here at the two places where `Play_SceneLoop` starts a segment (0x40637c for the normal start, 0x4064c0 for the re-entry path; both after the segment type is known). **Written, never read** (H): no instruction in DTPLAYER reads this dword of the record, neither through `g_seg` (0x432078) nor through the table base 0x4213b4. The other `+0x34` accesses in the binary belong to object, frame and triangle structs. It is a leftover of the authoring tool | 0x406020 |
 | 0x3c / 0x40 | i32 | view_w / view_h | 320×200 (0x200×0x200 on free-look). The engine overwrites them with 0x80 / 0x3000 when it enters a free-look segment. Used for projection and aim | 0x406020, 0x403780, 0x40e250, 0x4129b0, 0x412ab0 |
 | 0x44 | u8 | aim | crosshair / aiming enabled. Bit 0 of the frame flags is honoured only if this is set | 0x410740, 0x409e20, 0x40a4a0 |
 | 0x45 | u8 | xhair | crosshair style; also gates firing on type-1 frames | 0x409e20, 0x410740 |
 | 0x46 | i16 | entry_roll | read from the segment before a type-6 segment: its starting roll | 0x406020 → 0x407bf0 |
-| 0x48 | i16 | ? | almost always 0, a few rail segments ±46, −10, 11. No reader found | — |
+| 0x48 | i16 | ? | **exit roll** of the camera auto-turn, next to 0x1c / 0x1e. Read only by the mode-2/3 planner `FreeLook_Plan` 0x40f1c0 (at 0x40f341) when this segment is the target of a type-6 segment. Nonzero only on rail segments that follow a type-6 segment: LEVEL01 seg 9 (+46) and 13 (−46), LEVEL02 seg 11, 16, 18, 20, 22, 23 (±3…11). The planner scales it by 0.25 (FREELOOK_SPEC §5). H, and the engine already uses it (chain.c) | 0x40f1c0 |
 | 0x4a | i16 | half_fov | half field of view in 1/512° (0x3c00 = 30°, 0x4d4c ≈ 38.6°). The camera computes tan(value·π/92160) | `Cam_UpdateFromHeader` 0x402750 |
 | 0x4c | u8 | sfx_hp50 | SFX id when health drops below 50 % (0xff = none) | 0x417b90 (called from `Enemy_Update`) |
 | 0x4d | u8 | sfx_hp20 | SFX id when health drops below 20 % | 0x417b90 |
@@ -134,7 +134,13 @@ while you play your **frontier** level, that is when `g_curLevelNum` (NN of `Lev
 | ESC | 0x414130 `Key_Skip` | LEVEL00 → quit; LOGOS → INTRO → INTROB → LEVEL01 (skips the intro films). In a level: if `esc_target` is greater than the current segment, or the current `next` is 0, branch to `esc_target`. If `esc_target` equals the current segment, ESC is ignored. Otherwise leave to LEVEL00 (LOGOS in demo mode). Rate-limited to once per second |
 | F5 | 0x414310 | restart the current level from segment 0 (SavePoint is reset on the frontier level) |
 | F2 | 0x4143a0 | back to the hub LEVEL00 (not in demo mode) |
-| Space | — | sets 0x421574 (ACT fire request) |
+| Space | 0x417232 | sets 0x421574 (ACT fire request) |
+| F1 | 0x417241 | builds the help-file path from AppPath and opens it with `WinHelp` (HELP_CONTENTS) |
+| Pause, F3 | 0x417213 | master volume to 0, then `QuietlyActivateDeadlyTideUI` (brings the launcher window forward) |
+| F4 | 0x4172fa | toggles mute (flag 0x4215a0: master volume 0 or 0xff) |
+| F12 | 0x41732c | sets the screenshot request 0x421590 (`dump%04d.tga`, 16-bit mode only) |
+
+The whole `WM_KEYDOWN` table is 0x13..0x7b: the only keys with a handler are Pause, ESC, Space, F1..F5 and F12 (H, from the jump table at 0x4174ac, disassembled: the table is not decompiled in Ghidra). F3 and Pause share a handler. The ALT key itself (and F10 on key-up) is swallowed so the menu never activates, and `SC_MONITORPOWER` is refused; there are no debug keys. `WM_ACTIVATEAPP` (0x1c) with active = true re-reads `DifficultyLevel` (0x40cf90), `FlipControl` (0x40d0b0) and `UseJoystick` (0x40d020) from the registry and re-applies the volume (0 when muted by F4, else 0xff), so changes made in the launcher take effect when the player window is re-activated, without a restart. With active = false it restores the volume and shows the cursor. `GraphicQuality` is not re-read there (it is used only by `DD_Init`).
 
 Example: in LEVEL01, segments 0–4 (intro) have `esc_target` 5, so ESC jumps to the first combat
 segment. LEVEL04 segments 13–17 skip to 18.
@@ -219,4 +225,4 @@ god mode (`ACT_Fire` 0x4155b0).
   clips → LEVEL01..LEVEL15, INTRO.
 * `CDn_NEXT` files are one-segment "change CD" clips whose `next` picks the right linked name.
 
-Unknown: segment bytes 0x10, 0x11, 0x14, 0x48 (no reader found yet), and the exact use of the 0x34 value 0x115.
+No unknown segment bytes remain: 0x10 / 0x11 / 0x14 are SFX ids (COMBAT_SPEC), 0x48 is the exit roll, and 0x34 (0x115) is written by the engine but never read (§1). The bytes listed as 0 in every segment have no reader either.

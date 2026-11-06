@@ -334,8 +334,8 @@ Ordered by importance for gameplay. One line each; each is a candidate for a sep
     colour-table loading (overlaps the format task).
 27. **0x40d240 `Reg_NameHash`** and the 0x40d140..0x40d600 getters and setters: needed to stay
     save-compatible.
-28. **0x416fb0 WndProc (not yet a function in Ghidra)**: keyboard handling, debug keys, pause,
-    help (`dt.hlp`). **Create the function in Ghidra first.**
+28. **0x416fb0 WndProc (not a function in Ghidra; disassembled by hand)**: keys, pause, help and the mouse
+    buttons are decoded in SCENE_GRAPH §4 and COMBAT_SPEC §5. There are no debug keys.
 
 ---
 
@@ -381,7 +381,7 @@ Ordered by importance for gameplay. One line each; each is a candidate for a sep
   copies it in `Play_PanoHold` 0x4077d0 / 0x407bf0, to loop audio while a panorama is held.
 
 ### Open points
-- The WndProc at 0x416fb0 is not decompiled, so keyboard controls and debug keys are unknown.
+- The WndProc at 0x416fb0 is not in the Ghidra export, but its keys and buttons are decoded from the disassembly (SCENE_GRAPH §4).
 - Which display mode a typical machine got, and whether 8-bit mode was the norm.
 - The meaning of type-6 sub-modes (scene byte 0x21: 1..4) and what the 256×256 / 128×128 aux
   decoders hold (panorama strips or textures: M/L).

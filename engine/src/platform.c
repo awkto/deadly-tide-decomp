@@ -87,7 +87,7 @@ static void test_vpad_script(void)
     static uint64_t t0;
     if (!t0) t0 = SDL_GetTicks();
     unsigned s = (unsigned)((SDL_GetTicks() - t0) / 1000);   /* seconds since first poll */
-    int lx = 0, ly = 0, a = 0, rt = 0, b = 0;
+    int lx = 0, ly = 0, a = 0, rt = -32768, b = 0;   /* triggers rest at the axis minimum */
     if (s >= 2 && s < 4) lx = 32767;                         /* stick right */
     if (s >= 4 && s < 6) { lx = -32768; ly = -32768; a = s == 5; }   /* up-left, A fires */
     if (s >= 6 && s < 8) { lx = 32767; ly = 32767; rt = 32767; }     /* down-right, RT fires */
@@ -95,6 +95,7 @@ static void test_vpad_script(void)
     SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFTX, (Sint16)lx);
     SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFTY, (Sint16)ly);
     SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, (Sint16)rt);
+    SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, (Sint16)-32768);
     SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_SOUTH, a != 0);
     SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_EAST, b != 0);
     if (s == 11) SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_START, true);

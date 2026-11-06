@@ -184,6 +184,13 @@ void plat_present(const uint32_t *xrgb, int w, int h)
         g_tex_w = w; g_tex_h = h;
         g_frame_w = w; g_frame_h = h;
         SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+#ifdef __EMSCRIPTEN__
+        {   /* tell the page the picture size (4:3 launcher vs 8:5 game) so it can fit the canvas */
+            char js[96];
+            snprintf(js, sizeof js, "if (Module.onFrameSize) Module.onFrameSize(%d,%d)", w, h);
+            emscripten_run_script(js);
+        }
+#endif
     }
     SDL_UpdateTexture(g_tex, NULL, xrgb, w * (int)sizeof(uint32_t));
     SDL_RenderClear(g_ren);

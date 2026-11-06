@@ -74,20 +74,9 @@ function setPlaying(on, label) {
 
 // ---- canvas aspect: 4:3 launcher picture vs 8:5 (320x200) game ----
 // SDL keeps the canvas backing size equal to its CSS size and letterboxes the logical frame inside,
-// so the backing size says nothing. The frame size is visible as the size of the texture the engine
-// uploads each frame; watch those WebGL calls (no C change needed).
+// so the backing size says nothing; the engine reports the picture size via Module.onFrameSize.
 let frameAR = 1.6;
-function noteFrame(w, h) {
-  if (w < 300 || h < 180 || w / h === frameAR) return;
-  frameAR = w / h; fit();
-}
-for (const C of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
-  if (!C) continue;
-  for (const [fn, i] of [['texImage2D', 3], ['texSubImage2D', 4]]) {
-    const orig = C.prototype[fn];
-    C.prototype[fn] = function (...a) { if (typeof a[i] === 'number') noteFrame(a[i], a[i + 1]); return orig.apply(this, a); };
-  }
-}
+Module.onFrameSize = (w, h) => { if (w > 0 && h > 0 && w / h !== frameAR) { frameAR = w / h; fit(); } };
 const aspect = () => frameAR;
 function fit() {
   if (document.fullscreenElement) { canvas.style.width = canvas.style.height = ''; window.dispatchEvent(new Event('resize')); return; }   // CSS :fullscreen takes over

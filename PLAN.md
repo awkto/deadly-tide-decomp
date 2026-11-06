@@ -11,6 +11,7 @@ Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
 | 3 | Decompile `DTPLAYER.EXE` | done for everything the port needs: `docs/ENGINE_MAP.md`, `SCENE_GRAPH.md`, `GAMEPLAY_DATA.md`, `COMBAT_SPEC.md`, `FREELOOK_SPEC.md` |
 | 4 | Original under Wine | **works** — see `tools/wine/README.md`; LEVEL01 combat compared side by side with the port: HUD, crosshair, palette, sprites, explosions match |
 | 5 | C + SDL3 engine | feature-complete: combat, free-look 3D, hub mission select, saves, demo mode; bot finishes the whole game; windowed mouse/keyboard play tested under Xvfb + xdotool |
+| 5b | Launcher (DT.EXE) | documented (`docs/LAUNCHER.md`); the Pilot Control Center is rebuilt in the engine from the user's own DT.EXE bitmaps (native) |
 | 6 | WASM build | works in Chrome: lazy File.slice reads (Asyncify, 64MB heap for any level), level/full/demo start, difficulty, mouse combat, 15 fps |
 
 ## Next

@@ -30,6 +30,8 @@ cmake --build build/native -j
 build/native/deadlytide --data /path/to/game --level LOGOS   # full game from the start
 build/native/deadlytide --data /path/to/game --level LEVEL00 # mission select globe
 ```
+With the original `DT.EXE` in the data folder (or its `cd1/`), the game opens with the original
+launcher screen (pilots, controls, difficulty, volume), drawn from your own `DT.EXE`; `--no-menu` skips it.
 Mouse aims and fires, Space fires the ACT secondary weapon, Esc skips, F2 = hub, F5 = restart level,
 Q quits. Options: `--difficulty 0|1|2`, `--pilot NAME`, `--scale N`; `--help` lists everything.
 

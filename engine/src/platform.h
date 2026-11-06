@@ -53,12 +53,22 @@ void plat_delay_ms(uint32_t ms);
 /* Function keys seen by plat_quit_requested(), each reported once: PLAT_KEY_* bits. */
 #define PLAT_KEY_F2 1u
 #define PLAT_KEY_F5 2u
+#define PLAT_KEY_F1 4u
+#define PLAT_KEY_PAUSE 8u   /* Pause or F3, or the window lost focus */
+#define PLAT_KEY_F4 16u
+#define PLAT_KEY_F12 32u
 uint32_t plat_take_keys(void);
 /* Ctrl currently held (the hub's "restart the level" pick modifier). */
 int  plat_ctrl_held(void);
 /* ---- Launcher-screen support (native windowed build only; the web build has its own UI) ---- */
 /* Show / hide the OS mouse cursor (hidden in the game, visible in the menu). */
 void plat_show_cursor(int show);
+/* Pause / resume all audio output (queued audio is kept, so the stream position does not move). */
+void plat_audio_pause(int paused);
+/* Current volume 0..255. */
+int  plat_get_volume(void);
+/* Save a w*h XRGB8888 frame as a BMP file. 0 = ok. */
+int  plat_save_bmp(const uint32_t *xrgb, int w, int h, const char *path);
 /* Volume 0..255 for everything the platform plays (soundtrack + sound effects). Default 255. */
 void plat_set_volume(int vol);
 /* Text-input mode (SDL_StartTextInput). While on, the Q key no longer quits (it is typed text);

@@ -66,4 +66,7 @@ MenuResult menu_update(Menu *m, const MenuInput *in);
 /* Render the current state into dst (MENU_W*MENU_H pixels, 0xAARRGGBB, top-down). */
 void  menu_draw(const Menu *m, uint32_t *dst);
 
+/* Draw printable-ASCII text with the launcher's 5x7 font into any w*h 0xAARRGGBB buffer (6*scale px advance). */
+void  menu_draw_text(uint32_t *dst, int w, int h, int x, int y, const char *s, uint32_t c, int scale);
+
 #endif

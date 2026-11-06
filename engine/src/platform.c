@@ -250,6 +250,12 @@ int plat_quit_requested(void)
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_SPACE && !ev.key.repeat) g_act = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F2 && !ev.key.repeat) g_keys |= PLAT_KEY_F2;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F5 && !ev.key.repeat) g_keys |= PLAT_KEY_F5;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F1 && !ev.key.repeat) g_keys |= PLAT_KEY_F1;
+        if (ev.type == SDL_EVENT_KEY_DOWN && (ev.key.key == SDLK_PAUSE || ev.key.key == SDLK_F3) && !ev.key.repeat)
+            g_keys |= PLAT_KEY_PAUSE;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F4 && !ev.key.repeat) g_keys |= PLAT_KEY_F4;
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F12 && !ev.key.repeat) g_keys |= PLAT_KEY_F12;
+        if (ev.type == SDL_EVENT_WINDOW_FOCUS_LOST) g_keys |= PLAT_KEY_PAUSE;
     }
     return quit;
 }
@@ -390,6 +396,23 @@ const char *plat_user_dir(void)
 }
 
 void plat_show_cursor(int show) { if (show) SDL_ShowCursor(); else SDL_HideCursor(); }
+
+void plat_audio_pause(int paused)
+{
+    if (!g_audio_dev) return;
+    if (paused) SDL_PauseAudioDevice(g_audio_dev); else SDL_ResumeAudioDevice(g_audio_dev);
+}
+
+int plat_get_volume(void) { return g_vol; }
+
+int plat_save_bmp(const uint32_t *xrgb, int w, int h, const char *path)
+{
+    SDL_Surface *s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_XRGB8888, (void *)xrgb, w * (int)sizeof(uint32_t));
+    if (!s) return -1;
+    int ok = SDL_SaveBMP(s, path);
+    SDL_DestroySurface(s);
+    return ok ? 0 : -1;
+}
 
 void plat_set_volume(int vol)
 {

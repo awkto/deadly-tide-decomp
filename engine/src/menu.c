@@ -29,23 +29,23 @@ enum {
 /* ---- layout (pixels in the 640x480 picture; found by matching the sprites against bmp105) ---- */
 typedef struct { int x, y, w, h; } Rect;
 static const Rect R_FIELD = {126, 65, 226, 22}, R_ARROW = {352, 65, 19, 22};
-static const Rect R_ADD = {184, 41, 93, 23}, R_DEL = {278, 41, 94, 23};
-static const Rect R_HELP = {411, 41, 103, 23}, R_ABOUT = {411, 64, 103, 23};
+static const Rect R_ADD = {185, 41, 93, 23}, R_DEL = {279, 41, 94, 23};
+static const Rect R_HELP = {412, 41, 103, 23}, R_ABOUT = {412, 65, 103, 23};
 static const Rect R_MOUSE = {133, 138, 123, 39}, R_JOY = {133, 177, 123, 37}, R_CAL = {139, 214, 113, 32};
 static const Rect R_FLIP = {133, 246, 34, 36};
 static const Rect R_SLIDER = {318, 340, 44, 82};
-static const Rect R_EXIT = {121, 293, 153, 159}, R_START = {377, 308, 151, 142};
-#define SQ_X0 290
+static const Rect R_EXIT = {121, 293, 153, 159}, R_START = {369, 303, 151, 142};
+#define SQ_X0 290             /* hit box; the idle bevel starts at x 292/364/436, y 138 / 227 */
 #define SQ_DX 72
-#define SQ_Y_Q 137
-#define SQ_Y_D 225
+#define SQ_Y_Q 138
+#define SQ_Y_D 227
 #define METER_X 287
 #define METER_Y 351
 #define KNOB_X 322
 #define KNOB_Y0 344           /* knob top at volume 255 */
 #define KNOB_TRAVEL 60        /* H in the original formula (docs/LAUNCHER.md §3) */
 #define LIST_ROW 14
-#define EXF_X 119             /* "ARE YOU SURE?" flap frame (bmp138) origin; bottom-aligned to the EXIT well */
+#define EXF_X 121             /* "ARE YOU SURE?" flap frame (bmp138) origin; bottom-aligned to the EXIT well */
 #define EXF_Y 193
 #define DLG_X ((MENU_W - 273) / 2)
 #define DLG_Y ((MENU_H - 115) / 2)
@@ -251,6 +251,19 @@ static void delete_confirm(Menu *m)
 
 /* ------------------------------------------------------------------ create / free */
 
+/* The selected I/II/III squares carry a 4 px dark well around the bevel; drawn opaquely it shows as a dark
+ * rectangle that the idle panel does not have. Make the dark pixels of that outer ring transparent. */
+static void key_rim(PeImage *im)
+{
+    for (int y = 0; y < im->h; y++)
+        for (int x = 0; x < im->w; x++) {
+            if (x >= 4 && y >= 4 && x < im->w - 4 && y < im->h - 4) continue;
+            uint32_t p = im->px[y * im->w + x];
+            unsigned lum = (((p >> 16) & 255u) * 3u + ((p >> 8) & 255u) * 6u + (p & 255u)) / 10u;
+            if (lum <= 58) im->px[y * im->w + x] = 0;
+        }
+}
+
 static const int NEEDED[] = {104, 105, 110, 111, 112, 117, 118, 119, 120, 121, 122, 123, 124, 125, 129, 130, 131, 132, 133, 134,
                              136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153,
                              154, 155, 157, 158, 159, 161, 162, 163, 164, 170, 171, 172, 173, 174, 175, 176, 177, 178,
@@ -267,6 +280,7 @@ Menu *menu_create(const uint8_t *dt_exe, size_t n, const char *save_path)
         PeImage *im = &m->img[id];                 /* navy (0,0,128) is the transparent key (docs §6) */
         for (int k = 0; k < im->w * im->h; k++)
             if ((im->px[k] & 0xFFFFFFu) == 0x000080u) im->px[k] = 0;
+        if (id >= B_SQ_SEL && id < B_SQ_SEL + 3) key_rim(im);
     }
     if (!m->img[B_PANEL].px || m->img[B_PANEL].w != MENU_W || m->img[B_PANEL].h != MENU_H) { menu_free(m); return NULL; }
     if (save_path)
@@ -598,12 +612,12 @@ void menu_draw(const Menu *m, uint32_t *dst)
     blit(dst, I(m, (hover == W_FIELD && pressed == W_FIELD) ? B_ARROW_P : B_ARROW_N), R_ARROW.x, R_ARROW.y);
 
     /* ADD / DELETE / HELP / ABOUT: lit on hover, dim when unusable */
-    if (m->npil >= MENU_MAX_PILOTS) blit(dst, I(m, B_ADD_DIS), 184, 41);
-    else if (HOV(W_ADD)) blit(dst, I(m, B_ADD_H), 184, 41);
-    if (m->cur < 0) blit(dst, I(m, B_DEL_DIS), 278, 41);
-    else if (HOV(W_DEL)) blit(dst, I(m, B_DEL_H), 278, 41);
-    if (HOV(W_HELP)) blit(dst, I(m, B_HELP_H), 411, 41);
-    if (HOV(W_ABOUT)) blit(dst, I(m, B_ABOUT_H), 411, 64);
+    if (m->npil >= MENU_MAX_PILOTS) blit(dst, I(m, B_ADD_DIS), R_ADD.x, R_ADD.y);
+    else if (HOV(W_ADD)) blit(dst, I(m, B_ADD_H), R_ADD.x, R_ADD.y);
+    if (m->cur < 0) blit(dst, I(m, B_DEL_DIS), R_DEL.x, R_DEL.y);
+    else if (HOV(W_DEL)) blit(dst, I(m, B_DEL_H), R_DEL.x, R_DEL.y);
+    if (HOV(W_HELP)) blit(dst, I(m, B_HELP_H), R_HELP.x, R_HELP.y);
+    if (HOV(W_ABOUT)) blit(dst, I(m, B_ABOUT_H), R_ABOUT.x, R_ABOUT.y);
 
     /* CONTROLS. Mapping (unknown in the original): selected = blue sprite, hover = green, an unselected
      * MOUSE uses the bright idle variant, an unavailable JOYSTICK the dim one. */
@@ -611,9 +625,12 @@ void menu_draw(const Menu *m, uint32_t *dst)
     if (!joy) blit(dst, I(m, HOV(W_MOUSE) ? B_MOUSE_H : B_MOUSE_SEL), 133, 138);
     else blit(dst, I(m, HOV(W_MOUSE) ? B_MOUSE_H : B_MOUSE_N), 133, 138);
     if (!m->joy_avail) blit(dst, I(m, B_JOY_DIS), 133, 177);
-    else if (joy) blit(dst, I(m, B_JOY_SEL), 132, 176);
+    else if (joy) blit(dst, I(m, B_JOY_SEL), 133, 177);
     else if (HOV(W_JOY)) blit(dst, I(m, B_JOY_H), 133, 177);
-    if (joy && m->joy_avail) blit(dst, I(m, HOV(W_CAL) ? B_CAL_H : B_CAL), 139, 214);
+    if (joy && m->joy_avail) {                        /* the hover sprite is 31 px tall, the normal one 32 */
+        if (HOV(W_CAL)) blit(dst, I(m, B_CAL_H), 139, 215);
+        else blit(dst, I(m, B_CAL), 139, 214);
+    }
     blit(dst, I(m, m->sv.flip ? B_FLIP_ON : B_FLIP_OFF), 133, 246);
     if (pressed == W_FLIP && hover == W_FLIP) blit(dst, I(m, B_FLIP_P), 133, 246);
 
@@ -623,11 +640,14 @@ void menu_draw(const Menu *m, uint32_t *dst)
         for (int i = 0; i < 3; i++) {
             int w = (row ? W_DIFF : W_QUAL) + i;
             Rect r = sq_rect(row, i);
+            int dx = 0, dy = 0;
             int id = -1;
-            if (pressed == w && hover == w) id = B_SQ_PRS + i;
-            else if (hover == w) id = B_SQ_HOV + i;
-            else if (sel == i) id = B_SQ_SEL + i;
-            if (id >= 0) blit(dst, I(m, id), r.x, r.y);
+            if (pressed == w && hover == w) { id = B_SQ_PRS + i; dx = 2; }
+            else if (hover == w) { id = B_SQ_HOV + i; dx = 1; }
+            else if (sel == i) { id = B_SQ_SEL + i; dx = i ? -3 : -2; dy = -4; }
+            /* the sprite sets draw their bevel at different offsets inside the 70x70 (bevel edge vs the idle
+             * panel's, found by matching against bmp105; see sq_rect for the idle bevel origin) */
+            if (id >= 0) blit(dst, I(m, id), r.x + dx, r.y + dy);
         }
     }
 
@@ -643,10 +663,10 @@ void menu_draw(const Menu *m, uint32_t *dst)
     }
 
     /* START: glow cycle on hover, flash while pressed */
-    if (pressed == W_START && hover == W_START) blit(dst, I(m, B_START_PRS), 377, 308);
+    if (pressed == W_START && hover == W_START) blit(dst, I(m, B_START_PRS), 369, 303);
     else if (hover == W_START) {
         static const int seq[4] = {0, 1, 2, 1};
-        blit(dst, I(m, B_START_HOV + seq[(m->tick / 6) % 4]), 377, 308);
+        blit(dst, I(m, B_START_HOV + seq[(m->tick / 6) % 4]), 369, 303);
     }
 
     /* EXIT flap */

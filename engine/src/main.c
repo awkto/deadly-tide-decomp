@@ -257,7 +257,7 @@ static int play_tick(Player *p)
     if (pk & PLAT_KEY_F4) toggle_mute();
     if (pk & PLAT_KEY_F12) screenshot(chain_frame(c));
     if (p->paused) {
-        if (pk & PLAT_KEY_F1) { p->help = 1; draw_pause(p); }
+        if (pk & PLAT_KEY_F1) { p->help = 1; draw_pause(p); plat_any_input(); }
         else if (plat_any_input() && !(pk & (PLAT_KEY_F4 | PLAT_KEY_F12))) set_paused(p, 0);
         else if (++p->pause_tick % 20 == 0) draw_pause(p);   /* keep the window repainted */
         plat_skip_requested(); plat_act_requested();

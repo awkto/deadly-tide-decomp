@@ -21,7 +21,16 @@ See [PLAN.md](PLAN.md) for details and next steps.
 
 ## Game files
 Copy the `.L96` files from each CD into one folder (or keep them as `cd1/ … cd4/` subfolders):
-`LOGOS`, `INTRO`, `INTROB`, `LEVEL00`–`LEVEL15`, `EPILOG`, `CDn_NEXT`.
+`LOGOS`, `INTRO`, `INTROB`, `LEVEL00`–`LEVEL15`, `EPILOG`, `CDn_NEXT`, plus `DT.EXE` (for the launcher
+screen). File and folder names are matched case-insensitively on every platform (`logos.l96` is fine).
+The easiest layout is to put the executable next to the `cd1/ … cd4/` folders, or next to the loose `.L96` files.
+
+### First run
+Double-click the executable; no flags are needed. Without `--data` it looks for the game files in the
+folder remembered from last time, then in the executable's folder, then in the current directory. If none
+has `LOGOS.L96` or `LEVEL01.L96` (also inside `cd1`–`cd4`), it explains what is needed and opens a folder
+picker; the folder you choose is remembered (`datadir.txt` in the per-user data folder). `--choose-data`
+shows the picker again to change it; `--data DIR` always wins.
 
 ## Build (native)
 ```sh

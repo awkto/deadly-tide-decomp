@@ -4,6 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <dirent.h>
+#include <strings.h>
+#define DT_CI_PATHS 1
+#endif
+
 /* Entries of a flag-1 type-6/2 segment that precede the segment offset (DTPLAYER data). */
 #define SKIP_TYPE6 3
 #define SKIP_TYPE2 6
@@ -27,9 +33,59 @@ static uint64_t stdio_size(void *ctx)
 
 static void stdio_close(void *ctx) { fclose(ctx); }
 
+#ifdef DT_CI_PATHS
+/* Case-insensitive fallback for POSIX (CD files copied as logos.l96, CD1/ vs cd1/ ...): resolve
+ * each path component against its directory listing. 1 = resolved into out. */
+static int ci_resolve(const char *path, char *out, size_t n)
+{
+    size_t len = strlen(path);
+    if (len == 0 || len >= n) return 0;
+    char cur[1024];
+    size_t cl = 0;
+    const char *p = path;
+    if (*p == '/') { cur[cl++] = '/'; p++; }
+    while (*p) {
+        const char *e = strchr(p, '/');
+        size_t cn = e ? (size_t)(e - p) : strlen(p);
+        if (cn == 0) { p++; continue; }
+        char comp[256];
+        if (cn >= sizeof comp) return 0;
+        memcpy(comp, p, cn); comp[cn] = 0;
+        char dir[1024];
+        if (cl) { memcpy(dir, cur, cl); dir[cl] = 0; } else snprintf(dir, sizeof dir, ".");
+        int found = 0;
+        DIR *d = opendir(dir);
+        if (!d) return 0;
+        struct dirent *de;
+        char best[256] = "";
+        while ((de = readdir(d)) != NULL) {
+            if (!strcmp(de->d_name, comp)) { snprintf(best, sizeof best, "%s", de->d_name); found = 1; break; }
+            if (!found && !best[0] && !strcasecmp(de->d_name, comp)) snprintf(best, sizeof best, "%s", de->d_name);
+        }
+        closedir(d);
+        if (!best[0]) return 0;
+        if (cl && cur[cl - 1] != '/') cur[cl++] = '/';
+        size_t bl = strlen(best);
+        if (cl + bl + 2 >= sizeof cur) return 0;
+        memcpy(cur + cl, best, bl); cl += bl; cur[cl] = 0;
+        p += cn;
+    }
+    cur[cl] = 0;
+    if (cl >= n) return 0;
+    memcpy(out, cur, cl + 1);
+    return 1;
+}
+#endif
+
 static int stdio_open(const char *path, L96Reader *out)
 {
     FILE *fp = fopen(path, "rb");
+#ifdef DT_CI_PATHS
+    if (!fp) {
+        char real[1024];
+        if (ci_resolve(path, real, sizeof real)) fp = fopen(real, "rb");
+    }
+#endif
     if (!fp) return -1;
     out->ctx = fp; out->read_at = stdio_read_at; out->size = stdio_size; out->close = stdio_close;
     return 0;

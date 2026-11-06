@@ -63,3 +63,26 @@ const char *plat_user_dir(void)
     snprintf(dir, sizeof dir, "%s/deadlytide/", base);
     return dir;
 }
+
+void plat_show_cursor(int show) { (void)show; }
+void plat_set_volume(int vol) { (void)vol; }
+void plat_text_input(int on) { (void)on; }
+void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, int *released, int *down)
+{
+    if (n) text[0] = 0;
+    *keys = 0; *pressed = *released = *down = 0;
+}
+int plat_close_requested(void) { return 1; }
+int plat_is_up(void) { return 0; }
+uint64_t plat_time_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+/* No menu in the headless build: report "not found". */
+int plat_find_file(const char *dir, const char *name, char *out, size_t n)
+{
+    (void)dir; (void)name; (void)out; (void)n;
+    return 0;
+}

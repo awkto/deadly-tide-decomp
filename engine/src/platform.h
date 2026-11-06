@@ -49,6 +49,32 @@ void plat_delay_ms(uint32_t ms);
 uint32_t plat_take_keys(void);
 /* Ctrl currently held (the hub's "restart the level" pick modifier). */
 int  plat_ctrl_held(void);
+/* ---- Launcher-screen support (native windowed build only; the web build has its own UI) ---- */
+/* Show / hide the OS mouse cursor (hidden in the game, visible in the menu). */
+void plat_show_cursor(int show);
+/* Volume 0..255 for everything the platform plays (soundtrack + sound effects). Default 255. */
+void plat_set_volume(int vol);
+/* Text-input mode (SDL_StartTextInput). While on, the Q key no longer quits (it is typed text);
+ * the window close button still does. */
+void plat_text_input(int on);
+/* Menu events gathered by plat_quit_requested() since the previous call. text: UTF-8 typed, may be
+ * empty; keys: PLAT_MK_* bits; pressed/released: left-button edges (never both in one call: a
+ * click shorter than a poll reports the release on the next call); down: left button held. */
+#define PLAT_MK_ENTER 1u
+#define PLAT_MK_BACKSPACE 2u
+#define PLAT_MK_ESC 4u
+#define PLAT_MK_UP 8u
+#define PLAT_MK_DOWN 16u
+void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, int *released, int *down);
+/* Nonzero (sticky) once the window's close button was used. */
+int  plat_close_requested(void);
+/* Monotonic milliseconds. */
+uint64_t plat_time_ms(void);
+/* Find the file `name` (case-insensitive) in `dir`; writes the real path to out. 1 = found. */
+int  plat_find_file(const char *dir, const char *name, char *out, size_t n);
+/* Whether plat_init() already succeeded (window open). */
+int  plat_is_up(void);
+
 /* Per-user writable directory for the save file, ending in a path separator ("" if none). */
 const char *plat_user_dir(void);
 

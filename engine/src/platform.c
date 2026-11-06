@@ -14,6 +14,10 @@ static int              g_skip, g_act, g_any_input;
 static uint32_t         g_keys;
 static int              g_frame_w = 320, g_frame_h = 200;
 static SDL_Joystick    *g_joy;
+static int              g_closed, g_vol = 255;
+static char             g_text[64];
+static unsigned         g_mkeys;
+static int              g_mpress, g_mrel, g_mdown;
 
 /* SFX mixer: a second stream on the same device, filled on demand from a few voices. */
 #define N_VOICES 16
@@ -76,6 +80,7 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
         g_sfx = NULL;
     }
     SDL_ResumeAudioDevice(g_audio_dev);
+    plat_set_volume(g_vol);
     g_frame_w = w; g_frame_h = h;
 
     if (SDL_InitSubSystem(SDL_INIT_JOYSTICK)) {
@@ -126,8 +131,19 @@ int plat_quit_requested(void)
     SDL_Event ev;
     int quit = 0;
     while (SDL_PollEvent(&ev)) {
-        if (ev.type == SDL_EVENT_QUIT) quit = 1;
-        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q) quit = 1;
+        if (ev.type == SDL_EVENT_QUIT) { quit = 1; g_closed = 1; }
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q && !(g_win && SDL_TextInputActive(g_win)))
+            quit = 1;
+        if (ev.type == SDL_EVENT_TEXT_INPUT) SDL_strlcat(g_text, ev.text.text, sizeof g_text);
+        if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) {
+            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) g_mkeys |= PLAT_MK_ENTER;
+            if (ev.key.key == SDLK_ESCAPE) g_mkeys |= PLAT_MK_ESC;
+            if (ev.key.key == SDLK_UP) g_mkeys |= PLAT_MK_UP;
+            if (ev.key.key == SDLK_DOWN) g_mkeys |= PLAT_MK_DOWN;
+        }
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_BACKSPACE) g_mkeys |= PLAT_MK_BACKSPACE; /* repeats too */
+        if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_LEFT) { g_mpress = 1; g_mdown = 1; }
+        if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == SDL_BUTTON_LEFT) { g_mrel = 1; g_mdown = 0; }
         if ((ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
             g_any_input = 1;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE && !ev.key.repeat) g_skip = 1;
@@ -240,4 +256,55 @@ const char *plat_user_dir(void)
         if (p) { SDL_strlcpy(dir, p, sizeof dir); SDL_free(p); }
     }
     return dir;
+}
+
+void plat_show_cursor(int show) { if (show) SDL_ShowCursor(); else SDL_HideCursor(); }
+
+void plat_set_volume(int vol)
+{
+    g_vol = vol < 0 ? 0 : vol > 255 ? 255 : vol;
+    float gain = (float)g_vol / 255.0f;
+    if (g_audio) SDL_SetAudioStreamGain(g_audio, gain);
+    if (g_sfx) SDL_SetAudioStreamGain(g_sfx, gain);
+}
+
+void plat_text_input(int on)
+{
+    if (!g_win) return;
+    if (on) SDL_StartTextInput(g_win); else SDL_StopTextInput(g_win);
+    g_text[0] = 0; g_mkeys = 0; g_mpress = g_mrel = 0;
+}
+
+void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, int *released, int *down)
+{
+    if (n) SDL_strlcpy(text, g_text, n);
+    g_text[0] = 0;
+    *keys = g_mkeys; g_mkeys = 0;
+    *pressed = g_mpress; *released = g_mrel; *down = g_mdown;
+    g_mpress = 0;
+    if (*pressed && *released) { g_mrel = 1; *released = 0; *down = 1; }   /* release next call */
+    else g_mrel = 0;
+}
+
+int plat_close_requested(void) { return g_closed; }
+uint64_t plat_time_ms(void) { return SDL_GetTicks(); }
+int plat_is_up(void) { return g_win != NULL; }
+
+typedef struct { const char *name; char *out; size_t n; int found; } FindCtx;
+
+static SDL_EnumerationResult SDLCALL find_cb(void *ud, const char *dirname, const char *fname)
+{
+    FindCtx *f = ud;
+    if (SDL_strcasecmp(fname, f->name) != 0) return SDL_ENUM_CONTINUE;
+    size_t dl = SDL_strlen(dirname);
+    SDL_snprintf(f->out, f->n, "%s%s%s", dirname, (dl && dirname[dl - 1] != '/' && dirname[dl - 1] != '\\') ? "/" : "", fname);
+    f->found = 1;
+    return SDL_ENUM_SUCCESS;
+}
+
+int plat_find_file(const char *dir, const char *name, char *out, size_t n)
+{
+    FindCtx f = { name, out, n, 0 };
+    SDL_EnumerateDirectory(dir, find_cb, &f);
+    return f.found;
 }

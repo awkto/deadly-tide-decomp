@@ -17,6 +17,7 @@
 #include "game.h"
 #include "input.h"
 #include "l96.h"
+#include "menu.h"
 #include "platform.h"
 #include "save.h"
 
@@ -29,6 +30,10 @@ typedef struct {
 
 static CombatOpts g_cx = { 0, 0, 0, 0, 0, 0, 1, 0, 0 };
 
+/* Launcher settings (native menu): UseJoystick (-1 = no menu: a joystick, if present, is used) and
+ * FlipControl. */
+static int g_use_joy = -1, g_flip;
+
 static int difficulty_index(int reg) { return reg == 1 ? 0 : reg == 2 ? 2 : 1; }
 
 /* Windowed input: absolute mouse mapped onto the 320x200 frame; left = fire, right = alt,
@@ -37,12 +42,13 @@ static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState
 {
     (void)ud; (void)g; (void)objs;
     int x, y; uint32_t b;
-    if (plat_mouse(&x, &y, &b)) { io->x = x; io->y = y; io->buttons = b; }
+    if (plat_mouse(&x, &y, &b)) { io->x = x; io->y = g_flip ? CHAIN_H - 1 - y : y; io->buttons = b; }
     if (plat_ctrl_held()) io->buttons |= IN_CTRL;
-    if (plat_joystick(&x, &y, &b)) {
-        /* Flight-style default (§3.1): push forward -> crosshair goes down. */
+    if (g_use_joy != 0 && plat_joystick(&x, &y, &b)) {
+        /* Flight-style default (§3.1): push forward -> crosshair goes down; FlipControl inverts Y. */
         io->x = (x + 32768) * CHAIN_W / 65536;
-        io->y = CHAIN_H - 1 - (y + 32768) * CHAIN_H / 65536;
+        io->y = (y + 32768) * CHAIN_H / 65536;
+        if (!g_flip) io->y = CHAIN_H - 1 - io->y;
         io->buttons |= b;
     }
     if (plat_act_requested()) io->act = 1;
@@ -153,9 +159,12 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
         fprintf(stderr, "bad --look-script %s\n", g_look_script); chain_close(p->c); p->c = NULL;
     }
     if (!p->c) { game_free(p->game); p->game = NULL; return 1; }
-    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
+    if (!plat_is_up() && plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) {
         chain_close(p->c); p->c = NULL; game_free(p->game); p->game = NULL; return 1;
     }
+    plat_show_cursor(0);   /* the game draws its own crosshair; the original hides the OS cursor */
+    plat_text_input(0);
+    plat_skip_requested(); plat_act_requested(); plat_any_input(); plat_take_keys();
     p->sink.pace = pace;
     p->pace = pace;
     p->max_frames = max_frames;
@@ -217,13 +226,15 @@ static int play_tick(Player *p)
     return p->rc != 0;
 }
 
+static int g_keep_window;   /* native menu: the window outlives a game (menu -> game -> menu) */
+
 static int play_finish(Player *p)
 {
     fprintf(stderr, "sequence: %s\n", chain_history(p->c));
     if (p->game) game_print_stats(p->game, stderr);
     chain_close(p->c);
     game_free(p->game);
-    plat_shutdown();
+    if (!g_keep_window) plat_shutdown();
     return p->rc;
 }
 
@@ -234,6 +245,137 @@ static int play(const ChainOpts *co, int scale, long max_frames, int pace)
     if (play_init(&p, co, scale, max_frames, pace) != 0) return 1;
     while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
     return play_finish(&p);
+}
+
+/* ---- Launcher screen (native windowed build) ---------------------------------------------
+ * The original DT.EXE launcher ("Pilot Control Center", docs/LAUNCHER.md) is drawn by menu.c at
+ * 640x480; START applies the pilot's settings and plays the game, which returns to the menu when
+ * it ends. Closing the window quits everything; so does EXIT -> YES. */
+
+/* DT.EXE in the data dir or its cd1/ (any case); 1 = found. */
+static int find_dt_exe(const char *data, char *out, size_t n)
+{
+    char sub[1100];
+    if (plat_find_file(data, "DT.EXE", out, n)) return 1;
+    snprintf(sub, sizeof sub, "%s/cd1", data);
+    if (plat_find_file(sub, "DT.EXE", out, n)) return 1;
+    snprintf(sub, sizeof sub, "%s/CD1", data);
+    return plat_find_file(sub, "DT.EXE", out, n);
+}
+
+static uint8_t *slurp(const char *path, size_t *n)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    uint8_t *b = NULL;
+    long l = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (l > 0 && fseek(f, 0, SEEK_SET) == 0 && (b = malloc((size_t)l)) != NULL && fread(b, 1, (size_t)l, f) != (size_t)l) {
+        free(b); b = NULL;
+    }
+    fclose(f);
+    *n = b ? (size_t)l : 0;
+    return b;
+}
+
+static int is_demo_pilot(const char *s)
+{
+    const char *d = "demo";
+    for (; *d; d++, s++) if ((*s | 0x20) != *d) return 0;
+    return *s == 0;
+}
+
+/* Run the menu until START or quit. 0 = START (res filled), 1 = quit. */
+static int menu_run(Menu *m, MenuResult *res)
+{
+    static uint32_t fb[MENU_W * MENU_H];
+    int jx, jy;
+    uint32_t jb;
+    plat_show_cursor(1);
+    plat_text_input(1);
+    menu_set_joystick_available(m, plat_joystick(&jx, &jy, &jb));
+    uint64_t t0 = plat_time_ms();
+    long done = 0;
+    for (;;) {
+        if (plat_quit_requested() && plat_close_requested()) return 1;   /* Q is typed text here */
+        long due = (long)((plat_time_ms() - t0) * MENU_TICK_HZ / 1000);
+        if (due - done > 6) done = due - 6;            /* after a stall: do not fast-forward */
+        int redraw = 0;
+        while (done < due) {
+            char text[64];
+            unsigned keys;
+            int pressed, released, down, mx = 0, my = 0;
+            uint32_t b;
+            plat_take_menu_input(text, sizeof text, &keys, &pressed, &released, &down);
+            plat_mouse(&mx, &my, &b);    /* picture coordinates: the last frame presented is 640x480 */
+            MenuInput in = { mx, my, down, pressed, released, text[0] ? text : NULL, 0 };
+            if (keys & PLAT_MK_ENTER) in.keys |= MENU_KEY_ENTER;
+            if (keys & PLAT_MK_BACKSPACE) in.keys |= MENU_KEY_BACKSPACE;
+            if (keys & PLAT_MK_ESC) in.keys |= MENU_KEY_ESC;
+            if (keys & PLAT_MK_UP) in.keys |= MENU_KEY_UP;
+            if (keys & PLAT_MK_DOWN) in.keys |= MENU_KEY_DOWN;
+            *res = menu_update(m, &in);
+            done++;
+            redraw = 1;
+            if (res->action == MENU_START) return 0;
+            if (res->action == MENU_QUIT) return 1;
+        }
+        if (redraw) {
+            menu_draw(m, fb);
+            plat_present(fb, MENU_W, MENU_H);
+        }
+        plat_delay_ms(4);
+    }
+}
+
+/* Apply the chosen pilot's settings and set up the run. The menu has already stored them in the INI. */
+static void menu_apply(const MenuResult *r, const char *path, SaveData *sv, ChainOpts *co)
+{
+    save_load(sv, path, r->pilot);
+    save_set_current(path, sv->pilot);
+    g_cx = (CombatOpts){ 0, 0, 0, 0, 0, 0, sv->difficulty, 0, 0 };
+    g_use_joy = sv->use_joystick;
+    g_flip = sv->flip;
+    plat_set_volume(sv->volume);
+    /* Quality I/II/III (GraphicQuality) picks a DirectDraw video mode in the original; here the window is
+     * freely resizable with nearest scaling, so it has no effect. */
+    int demo = is_demo_pilot(sv->pilot);
+    if (demo) { g_cx.demo = 1; g_cx.god = 1; g_cx.bot = 1; }
+    co->level = (demo || sv->highest_level == 0) ? "LOGOS" : "LEVEL00";   /* as Game_Main */
+    co->from_seg = 0;
+    co->single = 0;
+    co->demo = g_cx.demo;
+    co->save = demo ? NULL : sv;
+}
+
+/* menu -> game -> menu until quit. */
+static int run_menu(const ChainOpts *co0, const char *dt_exe, const char *path, int scale, long max_frames, int pace)
+{
+    size_t n;
+    uint8_t *exe = slurp(dt_exe, &n);
+    if (!exe) { fprintf(stderr, "cannot read %s\n", dt_exe); return 1; }
+    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) { free(exe); return 1; }
+    g_keep_window = 1;
+    int rc = 0;
+    for (;;) {
+        Menu *m = menu_create(exe, n, path);      /* fresh each time: the game changed the pilot's progress */
+        if (!m) { fprintf(stderr, "cannot load the launcher art from %s\n", dt_exe); rc = 1; break; }
+        MenuResult res;
+        int quit = menu_run(m, &res);
+        menu_free(m);
+        if (quit) break;
+        static SaveData sv;
+        ChainOpts co = *co0;
+        menu_apply(&res, path, &sv, &co);
+        Player p;
+        if (play_init(&p, &co, scale, max_frames, pace) != 0) { rc = 1; break; }
+        while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
+        play_finish(&p);
+        plat_audio_clear();
+        if (plat_close_requested()) break;
+    }
+    free(exe);
+    plat_shutdown();
+    return rc;
 }
 
 /* ---- Headless frame dump ---------------------------------------------- */
@@ -314,6 +456,9 @@ static void usage(void)
         "usage: deadlytide --data DIR --level LEVEL01 [--from-seg N] [options]   play the scene chain\n"
         "       deadlytide --data DIR --file NAME.L96 --segment N [options]      play one segment\n"
         "options:\n"
+        "  --menu             show the launcher screen (needs DT.EXE in DIR or DIR/cd1); default when no\n"
+        "                     --level/--file/--demo and DT.EXE is found\n"
+        "  --no-menu          never show the launcher screen\n"
         "  --scale S          window scale (default 3)\n"
         "  --count N          stop after N ticks (1/15 s each)\n"
         "  --dump-frames DIR  headless: write composited frames as PPM\n"
@@ -352,6 +497,7 @@ int main(int argc, char **argv)
 {
     const char *data = ".", *file = NULL, *level = NULL, *dump = NULL;
     int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, auto_look = 0;
+    int menu_flag = 0;   /* 1 --menu, -1 --no-menu */
     int hub_between = 0, set_highest = -1, set_sp = -1, diff_given = 0;
     const char *save_path = NULL, *pilot = "Player";
     long count = 0, demo_loops = -1;
@@ -369,6 +515,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--dump-frames") && more) dump = argv[++i];
         else if (!strcmp(a, "--every") && more) every = atoi(argv[++i]);
         else if (!strcmp(a, "--seed") && more) seed = strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--menu")) menu_flag = 1;
+        else if (!strcmp(a, "--no-menu")) menu_flag = -1;
         else if (!strcmp(a, "--headless")) headless = 1;
         else if (!strcmp(a, "--no-pace")) pace = 0;
         else if (!strcmp(a, "--one-level")) one_level = 1;
@@ -396,6 +544,18 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
+    /* Launcher screen: windowed, no explicit level/file/demo. */
+    char dt_exe[1100] = "";
+    int want_menu = 0;
+    if (menu_flag >= 0 && !file && !level && !g_cx.demo && !dump && !headless) {
+        if (find_dt_exe(data, dt_exe, sizeof dt_exe)) want_menu = 1;
+        else if (menu_flag > 0) { fprintf(stderr, "--menu: DT.EXE not found in %s or %s/cd1\n", data, data); return 1; }
+        else fprintf(stderr, "note: DT.EXE not found in %s (no launcher screen); give --level or --file\n", data);
+    } else if (menu_flag > 0) {
+        fprintf(stderr, "--menu cannot be combined with --level/--file/--demo/--headless/--dump-frames\n");
+        return 2;
+    }
+    if (want_menu) level = "LOGOS";   /* placeholder so the checks below pass; the menu picks the start */
     if (g_cx.demo && !file && !level) level = "LOGOS";   /* the attract loop starts at the logo films */
     if ((!file && !level) || scale < 1 || every < 1) { usage(); return 2; }
 
@@ -423,7 +583,7 @@ int main(int argc, char **argv)
     if (diff_given) sv.difficulty = g_cx.difficulty; else g_cx.difficulty = sv.difficulty;
     if (set_highest >= 0) sv.highest_level = set_highest > 20 ? 20 : set_highest;
     if (set_sp >= 0) sv.save_point = set_sp;
-    if (!co.single && save_store(&sv) != 0) fprintf(stderr, "warning: cannot write %s\n", sv.path);
+    if (!co.single && !want_menu && save_store(&sv) != 0) fprintf(stderr, "warning: cannot write %s\n", sv.path);
     if (verbose || set_highest >= 0)
         fprintf(stderr, "pilot %s: HighestLevel %d SavePoint %d ACTNum %d DifficultyLevel %d (%s)\n", sv.pilot,
                 sv.highest_level, sv.save_point, sv.act_num, sv.difficulty, sv.path[0] ? sv.path : "not saved");
@@ -431,6 +591,11 @@ int main(int argc, char **argv)
     if (g_cx.demo) co.save = NULL;   /* attract mode is not the pilot's progress */
     g_cx.max_deaths = max_deaths >= 0 ? max_deaths : (dump || headless) ? 3 : 0;
     g_demo_loops = g_cx.demo ? (demo_loops >= 0 ? demo_loops : (headless ? 1 : 0)) : 0;
+    if (want_menu) {
+        if (!co.save) return 1;
+        g_cx.max_deaths = 0;
+        return run_menu(&co, dt_exe, path, scale, count, pace);
+    }
     if (dump || headless) return run_headless(&co, dump, count, every);
     return play(&co, scale, count, pace);
 }

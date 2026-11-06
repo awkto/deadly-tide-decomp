@@ -380,7 +380,7 @@ Engine column: "yes" means engine/src implements the behaviour, "n/a" means plat
 | 0x40d390 | Reg_ReadSavePoint | 190 | raw obfuscated SavePoint read | yes (save.c; file-based, no registry) |
 | 0x40d540 | Reg_ReadACTNum | 190 | raw obfuscated ACTNum read | yes (save.c; file-based, no registry) |
 | 0x40da80 | Spr_ResetSaveUnder | 23 | resets the sprite save-under state | no (engine redraws whole frame) |
-| 0x40dd00 | Px_Plot16Tinted | 70 | tinted 16-bit span blend through a shade table (function-pointer target) | partial (sprites.c has shade tables, tints not applied) |
+| 0x40dd00 | Px_Plot16Tinted | 70 | tinted 16-bit span blend through a shade table (function-pointer target) | done (sprites.c `draw_rle` applies the shade lookup; GAMEPLAY_DATA §8) |
 | 0x40e220 | View_SetLookSpeed | 11 | resets look speed to 0x50 | yes (main.c input) |
 | 0x411050 | Vec_Normalize | 107 | normalises a 3-float vector | yes (freelook.c) |
 | 0x411550 | Vec_AddScaled | 67 | double-precision vector a*s1 + b*s2 | yes (freelook.c own vector math) |
@@ -411,11 +411,11 @@ Engine column: "yes" means engine/src implements the behaviour, "n/a" means plat
 |---|---|---|---|
 | 0x402720 | EnemyShots_Reset | clears the enemy shot list at scene start; wrong reset timing would leak shots between scenes | yes |
 | 0x40da80 | Spr_ResetSaveUnder | sprite save-under reset; only matters for the original dirty-rect drawing | no, not needed |
-| 0x40dd00 | Px_Plot16Tinted | the 16-bit tinted span blend used for shade1/shade2 sprite tints (explosions, fades); the 8-bit twin 0x40dec0 is in the docs; the engine draws tinted sprites with plain colours today (GAMEPLAY_DATA s.8) | partial: gap |
+| 0x40dd00 | Px_Plot16Tinted | the 16-bit tinted span: `table[(src<<8)|dst_index]` stored directly as a 16-bit colour, used for explosion, gun flash and streak tints; documented in GAMEPLAY_DATA §8, engine matches | done |
 | 0x40e220 | View_SetLookSpeed | resets the look speed to 0x50 at scene entry; affects look feel | yes |
 | 0x416600 | Weapon_GetHeatStub | returns the heat value used by the HUD gun-flash path | yes |
 | 0x4098b0 / 0x4099a0 | Tri_SpanA / Tri_SpanB | edge stepping and 320 px clipping of the free-look rasteriser; the doc covers the algorithm but not these addresses | yes |
 | 0x411550 / 0x4115a0 | Vec_AddScaled / Vec_Sub | double-precision helpers inside the projection code | yes |
 | 0x40d180 / 0x40d390 / 0x40d540 | Reg_Read* (progress) | raw obfuscated reads of HighestLevel, SavePoint, ACTNum; the hash and keys are documented in LAUNCHER | yes (save.c) |
 
-Nothing in bucket C changes the documented combat or scene-graph rules. The one visible gameplay gap among them is shade/tint blending (the two tinted pixel routines and `Spr_SetTint`, which is documented). The 16-bit blit and decode paths (`Pano_Blit16*`, `Px_ConvertLine16`) matter only for the original 16-bit display mode.
+Nothing in bucket C changes the documented combat or scene-graph rules. Shade/tint blending (the two tinted pixel routines and `Spr_SetTint`) is documented in GAMEPLAY_DATA §8 and implemented. The 16-bit blit and decode paths (`Pano_Blit16*`, `Px_ConvertLine16`) matter only for the original 16-bit display mode.

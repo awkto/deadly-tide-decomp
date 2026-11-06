@@ -88,8 +88,8 @@ again with `CreateFileA` (unbuffered) in **FUN_00414420** and read by a separate
 | palette | 0x300 | 256 × (R,G,B) bytes. The ends hold the Windows system colours. |
 | sounds | variable | n_sounds × { 0x2c-byte header, data }. Header u32 @+8 = data size. The other header bytes are unknown and look like leftover memory from the authoring tool. The data is u8 mono PCM at 22050 Hz (FUN_004146c0 sets up the DirectSound buffers as 1 ch / 22050 / 8 bit). Loaded by FUN_00414e90. |
 | sprites | variable | n_sprites × { 16-byte header: char[4] tag (`EX `…), u32 count, u32 size, i16 type, i16 unk; then `size` bytes }. The payload starts with `count` 0x58-byte frame descriptors (+4 = data offset relative to the payload, +0x14/+0x16 = i16 width/height), followed by pixel data. Types 0..4 sort the sets into five engine lists. Types −3/−4 hold compressed pixels, which FUN_00402600 expands at load through FUN_00410ae0. Loaded by FUN_004022b0. |
-| shade | 2×n_shade1×0x20000 | Colour-transform tables (64K 16-bit entries each), probably for blending or tinting sprites. Selected per draw by FUN_0040db00 (index ≥ 0x80). Exact use unknown. |
-| shade2 | 2×n_shade2×0x2000 | Smaller colour tables, selected by FUN_0040db00 (index < 0x80). Exact use unknown. |
+| shade | 2×n_shade1×0x20000 | Colour-transform tables (64K 16-bit entries each), probably for blending or tinting sprites. Selected per draw by FUN_0040db00 (index ≥ 0x80). Sprite blend tables, see GAMEPLAY_DATA §8. |
+| shade2 | 2×n_shade2×0x2000 | Smaller colour tables, selected by FUN_0040db00 (index < 0x80). Gun flash and shot streak tints, see GAMEPLAY_DATA §8. |
 | segments | 100 × n | See §4. |
 | table44 | 0x44 × n | Unknown (1 record in LEVEL01). Read verbatim into a buffer by FUN_00413c40. |
 | table54 | 0x54 × n | Unknown (15 in LEVEL01). The first record bytes look like small index lists. Read verbatim. |

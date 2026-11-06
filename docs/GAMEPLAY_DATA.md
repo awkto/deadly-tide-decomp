@@ -216,12 +216,48 @@ python3 tools/sprites.py overlay cd/cd1/LEVEL01.L96 17 130 3 out/x.png
 
 `overlay` decodes the video frame with ffmpeg, starting from the last Cinepak key frame. It pastes
 every streamed sprite where its record puts it, and draws the hit bbox (green), the draw rect
-(yellow) and the projected 3D position (red cross). Results are in `out/gameplay_check/`. Tints are
-not applied; tinted sprites are drawn with plain palette colours.
+(yellow) and the projected 3D position (red cross). Results are in `out/gameplay_check/`. The Python overlay tool does
+not apply tints (it draws plain palette colours); the C engine does (§8).
 
 ## 7. Open points
 
 * Muzzle-y encoding of scripted shots (§3.2).
 * Type 6: the meaning of `+0x2c >> 6`, the full face numbering, and how the draw rect maps into the texture buffer.
-* The type-3 step table in the set entry. The exact role of shade2 (< 0x80) tints.
+* The type-3 step table in the set entry. (The shade2 tints are explained in §8.)
 * Frame-header dwords 9–16 are never read, and are 0 in every frame checked.
+
+## 8. Tinted sprites: shade tables, 8-bit and 16-bit paths
+
+**Which draws are tinted (H).** Only the per-frame tint byte (+0x48) selects a table; `Spr_Draw` 0x412440 reads it for
+every sprite. Over all 16 levels the values found are: 0 (plain: stream objects, HUD, crosshair), **0x80 / 0x81**
+(explosion animations, type-0 sets: shade1 tables #0 / #1), **1** (type-3 gun flash and ACT frames: shade2 #0) and
+**2** (type-4 enemy shot streaks: shade2 #1). The explosions are translucent glows, and the muzzle flash and streaks
+are soft light. The screen damage flash is not a sprite tint. It is the separate `Fx_Flash` colour conversion at
+present time (COMBAT_SPEC §5.4), and there are no tinted HUD, shadow or hit-flash sprites.
+
+**Table selection** (`Spr_SetTint` 0x40db00). tint ≥ 0x80 selects table `tint−0x80` of the n_shade1 tables, each 64K
+u16 entries (256 source × 256 destination). tint 1…0x7f selects table `tint−1` among the shade2 tables, each 4096 u16
+entries (16 × 256), stored after the shade1 tables. In the shade2 tables the source byte of the sprite is a level
+0…15. L96 stores every table twice, first as RGB555, then as RGB565. The loader skips the 555 copies when the display
+is not 555 (`Lut_Load` 0x40d960). The 565 copy equals the 555 one to within the 6-bit green precision (checked on
+LEVEL01: red and blue identical, green differs by less than one 5-bit step).
+
+**8-bit path** (`Px_Plot8Tinted` 0x40dec0): for each opaque RLE pixel, `col555 = table[(src << 8) | dst_index]`,
+where `dst_index` is the byte already in the frame buffer. The result is mapped back to a palette index through the
+32K-entry `lut555` (nearest colour). Plain sprites copy the index (0x40de10).
+
+**16-bit path** (`Px_Plot16Tinted` 0x40dd00): the destination is a 16-bit pixel. It is mapped to a palette index through
+the 64K-entry inverse map (565 or 555 per display), the same `table[(src << 8) | dst_index]` lookup is done, and
+the table's 16-bit colour is **stored directly**, with no mapping back to the palette. Unlike the 8-bit path, the blend
+result keeps its full colour range. There is no arithmetic blend formula in either path: all the blending is in the
+tables. The default GraphicQuality III is 320x240 16-bit (LAUNCHER §7a), so a normal player sees the 16-bit
+path. It is the "original look" we match (H for the lookup, M for the claim that the default mode is reached on
+real hardware).
+
+**Engine** (`sprites.c` `draw_rle`, M-H). It implements this lookup on the XRGB frame. `dst_index` comes from the frame
+pixel through `lut555`. The 555 table result is expanded straight to RGB, like the 16-bit path. It is applied to
+explosions, gun flash, ACT frames, enemy streaks and free-look sprites (all go through `sprite_draw`). Remaining
+differences (L): we use the 555 table copy rather than the 565 copy (at most one 5-bit green step), and the
+destination index is quantised from 8-bit-per-channel RGB rather than from the original's RGB565 pixel. Both are below
+visibility. Checked with headless frame dumps of LEVEL01 (seed 7, 1500 ticks): 382 frames differ from a no-tint
+render, e.g. a translucent blue explosion instead of an opaque dark-red disc.

@@ -43,6 +43,8 @@ typedef struct {
 
 typedef struct Chain Chain;
 
+/* pcm == NULL, n == 0: flush - drop the audio queued so far (the ring was dropped by a jump); the next
+ * call carries the first group of the new stream. */
 typedef void (*ChainAudioFn)(void *ud, const uint8_t *pcm, size_t n);
 
 Chain *chain_open(const ChainOpts *o);   /* NULL on failure (message on stderr) */
@@ -73,6 +75,8 @@ int chain_to_hub(Chain *c);
 /* Nonzero once after the chain jumped on its own (death / kill branch): groups were dropped,
  * so the caller should drop queued audio too, as after chain_skip. */
 int chain_take_jump(Chain *c);
+/* The frame chain_step handled last: its group (counted from the last audio flush) and tick in it. */
+void chain_shown(const Chain *c, int *group, int *tick);
 
 /* Current position, for logs: file stem and segment on screen. */
 const char *chain_level(const Chain *c);

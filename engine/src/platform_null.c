@@ -12,8 +12,16 @@
 
 #include "platform.h"
 
+/* --av-check: a simulated device. Time is advanced only by plat_delay_ms (no real sleeping); the device
+ * consumes queued bytes at exactly 22050 Hz * 2 B/s of that time. */
+static int g_virt, g_virt_up;
+static uint64_t g_sim_ms, g_virt_queued, g_virt_eaten;
+
+int plat_virtual_audio(int on) { g_virt = on; return 0; }
+
 int plat_init(int w, int h, int scale, int audio_rate, const char *title)
 {
+    if (g_virt) { g_virt_up = 1; return 0; }
     (void)w; (void)h; (void)scale; (void)audio_rate; (void)title;
     fprintf(stderr, "platform: headless build, no window/audio (use --headless or --dump-frames)\n");
     return -1;
@@ -21,12 +29,12 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
 
 void plat_shutdown(void) {}
 void plat_present(const uint32_t *xrgb, int w, int h) { (void)xrgb; (void)w; (void)h; }
-int  plat_quit_requested(void) { return 1; }
+int  plat_quit_requested(void) { return !g_virt; }
 int  plat_skip_requested(void) { return 0; }
-int  plat_audio_queue(const uint8_t *data, size_t n) { (void)data; (void)n; return 0; }
-size_t plat_audio_queued(void) { return 0; }
+int  plat_audio_queue(const uint8_t *data, size_t n) { (void)data; g_virt_queued += n; return 0; }
+size_t plat_audio_queued(void) { return (size_t)g_virt_queued; }
 void plat_audio_flush(void) {}
-void plat_audio_clear(void) {}
+void plat_audio_clear(void) { g_virt_queued = 0; }
 
 int  plat_gamepad(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
 void plat_set_fullscreen(int on) { (void)on; }
@@ -41,6 +49,13 @@ void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan)
 
 void plat_delay_ms(uint32_t ms)
 {
+    if (g_virt) {
+        g_sim_ms += ms;
+        uint64_t due = g_sim_ms * 22050 * 2 / 1000 - g_virt_eaten;   /* bytes the device would play */
+        g_virt_eaten += due;
+        g_virt_queued -= due < g_virt_queued ? due : g_virt_queued;   /* an empty queue underruns */
+        return;
+    }
     struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };
     nanosleep(&ts, NULL);
 }
@@ -82,9 +97,10 @@ void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, in
     *keys = 0; *pressed = *released = *down = 0;
 }
 int plat_close_requested(void) { return 1; }
-int plat_is_up(void) { return 0; }
+int plat_is_up(void) { return g_virt_up; }
 uint64_t plat_time_ms(void)
 {
+    if (g_virt) return g_sim_ms;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;

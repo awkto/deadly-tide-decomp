@@ -142,6 +142,24 @@ static void text(uint32_t *dst, int x, int y, const char *s, uint32_t c, int sca
     }
 }
 
+void menu_draw_text(uint32_t *dst, int w, int h, int x, int y, const char *s, uint32_t c, int scale)
+{
+    for (; *s; s++, x += 6 * scale) {
+        unsigned ch = (unsigned char)*s;
+        if (ch < 32 || ch > 126) continue;
+        for (int cx = 0; cx < 5; cx++) {
+            unsigned col = FONT[ch - 32][cx];
+            for (int cy = 0; cy < 8; cy++)
+                if (col >> cy & 1u)
+                    for (int sy = 0; sy < scale; sy++)
+                        for (int sx = 0; sx < scale; sx++) {
+                            int px = x + cx * scale + sx, py = y + cy * scale + sy;
+                            if (px >= 0 && py >= 0 && px < w && py < h) dst[py * w + px] = c;
+                        }
+        }
+    }
+}
+
 /* Draw a part of an image (alpha 0 = transparent). */
 static void blit_part(uint32_t *dst, const PeImage *im, int dx, int dy, int sx, int sy, int sw, int sh)
 {

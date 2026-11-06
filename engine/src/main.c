@@ -160,7 +160,69 @@ typedef struct {
     AudioSink sink;
     long frame_no, max_frames;
     int pace, rc, drain_ticks, ended;
+    int paused, help;          /* Pause/F3/focus loss; F1 help page over the paused frame */
+    unsigned pause_tick;
 } Player;
+
+/* ---- Pause / help overlays, F4 mute, F12 screenshot (WM_KEYDOWN F1/F3/F4/F12 + WM_ACTIVATEAPP) ---- */
+static int g_muted, g_unmuted_vol = 255;
+
+static void toggle_mute(void)
+{
+    if (!g_muted) { g_unmuted_vol = plat_get_volume(); plat_set_volume(0); g_muted = 1; }
+    else { plat_set_volume(g_unmuted_vol > 0 ? g_unmuted_vol : 255); g_muted = 0; }
+    fprintf(stderr, "sound %s\n", g_muted ? "muted" : "on");
+}
+
+static void screenshot(const uint32_t *frame)
+{
+    char path[1100];
+    for (int n = 0; n < 10000; n++) {
+        snprintf(path, sizeof path, "%sdump%04d.bmp", plat_user_dir(), n);
+        FILE *f = fopen(path, "rb");
+        if (!f) break;
+        fclose(f);
+    }
+    if (plat_save_bmp(frame, CHAIN_W, CHAIN_H, path) == 0) fprintf(stderr, "screenshot: %s\n", path);
+    else fprintf(stderr, "screenshot failed: %s\n", path);
+}
+
+static void overlay_line(uint32_t *fb, int y, const char *s, uint32_t c, int scale)
+{
+    int w = (int)strlen(s) * 6 * scale - scale;
+    menu_draw_text(fb, CHAIN_W, CHAIN_H, (CHAIN_W - w) / 2, y, s, c, scale);
+}
+
+static void draw_pause(const Player *p)
+{
+    static uint32_t fb[CHAIN_W * CHAIN_H];
+    const uint32_t *src = chain_frame(p->c);
+    for (int i = 0; i < CHAIN_W * CHAIN_H; i++) fb[i] = (src[i] >> 1) & 0x7F7F7Fu;
+    if (!p->help) {
+        overlay_line(fb, 84, "PAUSED", 0xFFFFFFFFu, 4);
+        overlay_line(fb, 124, "F1 HELP    ANY KEY RESUMES", 0xFFC0C0C0u, 1);
+    } else {
+        static const char *const L[] = {
+            "MOUSE / STICK  AIM", "LEFT CLICK / A  FIRE", "SPACE / B / X  ACT WEAPON",
+            "ESC / START  SKIP", "F2 / BACK  HUB", "F5  RESTART LEVEL", "PAUSE / F3  PAUSE",
+            "F4  MUTE", "F11 / ALT+ENTER  FULLSCREEN", "F12  SCREENSHOT", "Q  QUIT" };
+        overlay_line(fb, 12, "CONTROLS", 0xFFFFFFFFu, 2);
+        for (int i = 0; i < (int)(sizeof L / sizeof *L); i++) overlay_line(fb, 38 + i * 12, L[i], 0xFFE0E0E0u, 1);
+        overlay_line(fb, 184, "ANY KEY RESUMES", 0xFFC0C0C0u, 1);
+    }
+    plat_present(fb, CHAIN_W, CHAIN_H);
+}
+
+static void set_paused(Player *p, int on)
+{
+    p->paused = on; p->help = 0; p->pause_tick = 0;
+    plat_audio_pause(on);
+    if (on) { draw_pause(p); fprintf(stderr, "paused\n"); }
+    else {
+        plat_present(chain_frame(p->c), CHAIN_W, CHAIN_H);
+        fprintf(stderr, "resumed\n");
+    }
+}
 
 static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames, int pace)
 {
@@ -191,6 +253,24 @@ static int play_tick(Player *p)
 {
     Chain *c = p->c;
     if (plat_quit_requested()) return 1;
+    uint32_t pk = plat_take_keys();
+    if (pk & PLAT_KEY_F4) toggle_mute();
+    if (pk & PLAT_KEY_F12) screenshot(chain_frame(c));
+    if (p->paused) {
+        if (pk & PLAT_KEY_F1) { p->help = 1; draw_pause(p); }
+        else if (plat_any_input() && !(pk & (PLAT_KEY_F4 | PLAT_KEY_F12))) set_paused(p, 0);
+        else if (++p->pause_tick % 20 == 0) draw_pause(p);   /* keep the window repainted */
+        plat_skip_requested(); plat_act_requested();
+        return 0;
+    }
+    if (!g_cx.demo && !p->ended && (pk & (PLAT_KEY_PAUSE | PLAT_KEY_F1))) {
+        p->help = (pk & PLAT_KEY_F1) != 0;
+        set_paused(p, 1);
+        p->help = (pk & PLAT_KEY_F1) != 0;
+        if (p->help) draw_pause(p);
+        plat_any_input(); plat_skip_requested(); plat_act_requested();
+        return 0;
+    }
     if (g_cx.demo && plat_any_input()) return 1;   /* any key / click ends the attract loop */
     if (plat_skip_requested()) {
         int r = chain_skip(c);
@@ -201,7 +281,7 @@ static int play_tick(Player *p)
             plat_audio_clear();
         }
     }
-    if (fkeys(c, p->frame_no, plat_take_keys()) && p->pace) {
+    if (fkeys(c, p->frame_no, pk) && p->pace) {
         p->sink.audio_put -= plat_audio_queued();
         plat_audio_clear();
     }
@@ -320,6 +400,7 @@ static void menu_apply(const MenuResult *r, const char *path, SaveData *sv, Chai
     g_use_joy = sv->use_joystick;
     g_flip = sv->flip;
     plat_set_volume(sv->volume);
+    g_muted = 0;
     /* Quality I/II/III (GraphicQuality) picks a DirectDraw video mode in the original; here the window is
      * freely resizable with nearest scaling, so it has no effect. */
     int demo = is_demo_pilot(sv->pilot);
@@ -350,6 +431,7 @@ static int menu_session(const ChainOpts *co0, const uint8_t *exe, size_t n, cons
         Player p;
         if (play_init(&p, &co, scale, max_frames, pace) != 0) { rc = 1; break; }
         while (!play_tick(&p)) wait_ms(p.ended ? 10 : p.pace ? 2 : 1);
+        plat_audio_pause(0);
         play_finish(&p);
         plat_audio_clear();
         if (plat_close_requested()) break;

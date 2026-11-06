@@ -47,6 +47,13 @@ void plat_delay_ms(uint32_t ms)
 
 uint32_t plat_take_keys(void) { return 0; }
 int plat_ctrl_held(void) { return 0; }
+void plat_audio_pause(int paused) { (void)paused; }
+int  plat_get_volume(void) { return 255; }
+int  plat_save_bmp(const uint32_t *xrgb, int w, int h, const char *path)
+{
+    (void)xrgb; (void)w; (void)h; (void)path;
+    return -1;
+}
 
 /* $XDG_DATA_HOME/deadlytide/ or ~/.local/share/deadlytide/ (created on first use). */
 const char *plat_user_dir(void)

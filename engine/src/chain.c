@@ -302,6 +302,7 @@ static int switch_file(Chain *c)
 
 int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
 {
+    int spin = 0;   /* segment hops without reading a group: empty segments that point at each other */
     while (!c->ended && c->n < RING && c->n <= ahead) {
         if (c->read_done) {
             if (c->pending && c->n == 0) { if (switch_file(c) != 0) return -1; continue; }
@@ -328,8 +329,13 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
             }
             c->n++;
             c->rk++;
+            spin = 0;
         }
         if (c->rk >= sg->count) {
+            if (++spin > 1024) {
+                fprintf(stderr, "chain: %s:%d: segments without groups loop forever\n", c->stem, c->rseg);
+                c->ended = 1; return -1;
+            }
             if (c->o.game && !c->o.single) {
                 /* Resolve only when the display side is within BRANCH_LEAD groups of the end, with no
                  * death / kill request pending (that one wins: chain_step jumps). */

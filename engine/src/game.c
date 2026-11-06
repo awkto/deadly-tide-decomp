@@ -157,6 +157,12 @@ static int read_at(const L96File *f, uint64_t off, void *dst, size_t n)
     return l96_read(f, off, dst, n);
 }
 
+/* Does [off, off + n) lie inside the file? (Header counts are untrusted: check before allocating.) */
+static int fits(const L96File *f, uint64_t off, uint64_t n)
+{
+    return !f->rd.size || (off <= f->rd.size(f->rd.ctx) && n <= f->rd.size(f->rd.ctx) - off);
+}
+
 static int load_sets(Game *g, const L96File *f, uint32_t off, uint32_t n)
 {
     uint64_t pos = off;
@@ -166,6 +172,7 @@ static int load_sets(Game *g, const L96File *f, uint32_t off, uint32_t n)
         pos += 16;
         uint32_t count = rd32(h + 4), size = rd32(h + 8);
         int type = rd16(h + 12), hint = rd16(h + 14);
+        if (!fits(f, pos, size)) return -1;
         uint8_t *data = malloc(size ? size : 1);
         if (!data || read_at(f, pos, data, size) != 0) { free(data); return -1; }
         pos += size;
@@ -207,6 +214,8 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
     uint32_t n_snd = rd32(h + 0x1c), n_spr = rd32(h + 0x20), flag24 = rd32(h + 0x24);
     uint32_t n54 = rd32(h + 0x34), n28 = rd32(h + 0x38);
     g->act_start = h[0x88];
+    if (!fits(f, rd32(h + 0x64), (uint64_t)n54 * CLS_SIZE) || !fits(f, rd32(h + 0x68), (uint64_t)n28 * ACT_SIZE) ||
+        n54 > INT32_MAX || n28 > INT32_MAX) return -1;
     g->n_cls = (int)n54; g->n_act = (int)n28;
     g->cls   = calloc(n54 ? n54 : 1, CLS_SIZE);
     g->act   = calloc(n28 ? n28 : 1, ACT_SIZE);
@@ -233,7 +242,9 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
 
     /* Sounds: n x {0x2c header (u32 size at +8), u8 mono PCM}. */
     if (n_snd) {
-        uint32_t off = rd32(h + 0x4c), total = 0;
+        uint32_t off = rd32(h + 0x4c);
+        uint64_t total = 0;
+        if (!fits(f, off, (uint64_t)n_snd * 0x2c)) return -1;
         g->snd = calloc(n_snd, sizeof *g->snd);
         if (!g->snd) return -1;
         size_t cap = 0;
@@ -245,10 +256,11 @@ int game_level_load(Game *g, const L96File *f, const SpriteCtx *spr)
             sizes[i] = rd32(sh + 8);
             total += 0x2c + sizes[i];
             cap += sizes[i];
+            if (!fits(f, off, total)) { free(sizes); return -1; }
         }
         g->snd_data = malloc(cap ? cap : 1);
         if (!g->snd_data) { free(sizes); return -1; }
-        size_t at = 0; uint32_t pos = off;
+        size_t at = 0; uint64_t pos = off;
         for (uint32_t i = 0; i < n_snd; i++) {
             if (read_at(f, pos + 0x2c, g->snd_data + at, sizes[i]) != 0) { free(sizes); return -1; }
             g->snd[i].pcm = g->snd_data + at; g->snd[i].n = sizes[i];

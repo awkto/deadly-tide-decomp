@@ -38,7 +38,10 @@ static int mem_open(const char *path, L96Reader *out)
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
     (void)argc; (void)argv;
-    if (!freopen("/dev/null", "w", stderr)) return 1;   /* the readers log every rejection */
+    /* The readers log every rejection to stdio's stderr; leave fd 2 alone so sanitizer reports show. */
+    FILE *nul = fopen("/dev/null", "w");
+    if (!nul) return 1;
+    stderr = nul;
     l96_set_open_fn(mem_open);
     return 0;
 }

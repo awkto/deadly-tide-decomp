@@ -385,6 +385,7 @@ static void reset_for_scene(Game *g)
         g->state[i] = pct() > c[0x1b] ? ST_GONE : (int8_t)(-0x40 - c[0x1f]);
         g->expl[i] = NULL;
     }
+    if (g->o.verbose > 2) { int n = 0; for (int i = 0; i < g->n_act; i++) n += g->state[i] < -0x40; fprintf(stderr, "reset %s:%d alive %d/%d\n", g->stem, g->seg, n, g->n_act); }
     memset(g->loops, 0, sizeof g->loops);
     g->hw_band = 100; g->hw_t20 = g->hw_t50 = g->hw_t80 = -0x8000;
     memset(g->streaks, 0, sizeof g->streaks);
@@ -889,6 +890,7 @@ static void enemy_update(Game *g, FgBlock *b)
                 if (mx > 0 && mx < W && my > 0 && my < H) streak_spawn(g, r, mx, my);
                 sfx(g, pick(c + 0x32, 2), screen_pan(r), size_vol(r, c));
                 if (hit && dmg > c[0x1e]) {
+                    if (g->o.verbose > 2) fprintf(stderr, "dmg %ld actor %d cls fire %d hit %d dmg %d: %d (%dx%d)\n", g->frame_no, id, c[0x1c], c[0x1d], c[2], dmg, r->w, r->h);
                     g->health -= dmg * 100;            /* --god: the attract regen refills it */
                     g->st.damage += dmg * 100;
                     frame_dmg += dmg;
@@ -1123,6 +1125,7 @@ static void hud_draw(Game *g, FgBlock *b, int fire_allowed, uint32_t *dst)
                 on_target = 1;
         }
     }
+    if (g->o.verbose > 2) fprintf(stderr, "hp %s:%d %ld %d\n", g->stem, g->seg, g->frame_no, g->health);
     if (!g->death_latch && !g->dead && g->health < 1) {
         g->death_latch = 1;
         g->branch_req = (int8_t)g->rec[0x23];

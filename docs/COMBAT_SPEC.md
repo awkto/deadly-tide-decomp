@@ -530,6 +530,16 @@ prev[id] = {bbox x0, y0, w, h, dist2}
 After the loop: if heavy, `Fx_Flash(2, 20)` and `Sfx_PlayerHurtHeavy(heavyClass)`; else if light,
 `Sfx_PlayerHurtLight(lightClass)`. Then `Sfx_HealthWarning(seg, health/100)`.
 
+**RNG (H).** `rand()` is the MSVC CRT linear congruential generator (state * 214013 + 2531011, bits
+16..30). The program never calls `srand` (no writer of the state exists), and the state starts at 1,
+so the original's random stream is a fixed sequence from process start: runs with the same input
+timing are nearly identical, and a handful of original runs is not a sample of the death-time
+distribution. Our `--seed` mixes the seed first, so different seeds sample different streams. The
+fire roll is once per targetable record per drawn frame (15 fps), exactly as ours; an audit of the
+fire, hit, damage-threshold, regen and difficulty-index logic found no deviation. The spread of
+death times between seeds (idle player, LEVEL01 from segment 5) comes from which actors pass the
+per-actor spawn roll at the checkpoint and from bursts when several are on screen.
+
 **Effective damage.** A random shot that hits does dmg ∈ [0, c.dmg), uniform over the
 hit-percentage roll, and only counts if it is > dmg_min. For LEVEL01 (dmg 7, dmg_min 2) a counted
 hit is 3–6, i.e. 300–600 health. Difficulty changes damage only by picking a different class

@@ -53,6 +53,9 @@ struct Chain {
     uint32_t frame[CHAIN_W * CHAIN_H];
     long ticks, last_esc;
     int  jumped;
+    int  groups_shown;             /* groups fully shown since the last ring drop (audio flush) */
+    int  shown_gi, shown_vf;       /* group / tick of the frame chain_step handled last */
+    int  flush_audio;              /* the ring was dropped: tell the audio sink before the next group's audio */
 
     /* Free-look (freelook.h). */
     Freelook       fl;
@@ -141,6 +144,8 @@ static void drop_ring(Chain *c)
     for (int i = 0; i < RING; i++) l96_group_free(&c->ring[i].g);
     c->head = c->n = 0;
     c->vf = 0;
+    c->groups_shown = 0;
+    c->flush_audio = 1;     /* the audio already emitted for the dropped groups is stale */
 }
 
 static int frontier(const Chain *c) { return c->o.save && c->cur_level == c->o.save->highest_level; }
@@ -323,6 +328,7 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud)
             s->tex = si->type == SEG_FREELOOK ? c->pre_gen : -1;
             s->auto_pick = c->picked;
             if (c->accumulate) collect_tiles(c, sg->count, c->rk, &s->g);
+            if (c->flush_audio) { if (fn) fn(ud, NULL, 0); c->flush_audio = 0; }
             if (fn) {
                 if (s->g.audio_size >= L96_AUDIO_BYTES) fn(ud, s->g.audio, L96_AUDIO_BYTES);
                 else fn(ud, g_silence, L96_AUDIO_BYTES);   /* keep the audio clock in step */
@@ -566,6 +572,8 @@ static void apply_branch(Chain *c, int target)
     }
 }
 
+void chain_shown(const Chain *c, int *group, int *tick) { *group = c->shown_gi; *tick = c->shown_vf; }
+
 int chain_take_jump(Chain *c)
 {
     int j = c->jumped;
@@ -617,6 +625,7 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
 
     Slot *s = &c->ring[c->head];
     const SegInfo *si = &c->sc.seg[s->seg];
+    c->shown_gi = c->groups_shown; c->shown_vf = c->vf;
     int nticks = s->g.n_frames ? s->g.n_frames : L96_FRAMES_PER_GROUP;
 
     int prev_seg = c->disp_seg;
@@ -684,6 +693,7 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
         c->head = (c->head + 1) % RING;
         c->n--;
         c->vf = 0;
+        c->groups_shown++;
     }
     return 1;
 }

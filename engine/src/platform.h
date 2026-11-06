@@ -49,6 +49,8 @@ int  plat_any_input(void);
 void plat_sfx_play(const uint8_t *pcm_u8_mono, size_t n, int vol, int pan);
 
 void plat_delay_ms(uint32_t ms);
+/* --av-check: use a simulated window and audio device (headless build only; -1 elsewhere). */
+int  plat_virtual_audio(int on);
 
 /* Function keys seen by plat_quit_requested(), each reported once: PLAT_KEY_* bits. */
 #define PLAT_KEY_F2 1u

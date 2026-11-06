@@ -375,6 +375,7 @@ void plat_sfx_play(const uint8_t *pcm, size_t n, int vol, int pan)
 }
 
 void plat_delay_ms(uint32_t ms) { SDL_Delay(ms); }
+int  plat_virtual_audio(int on) { (void)on; return -1; }
 
 uint32_t plat_take_keys(void)
 {

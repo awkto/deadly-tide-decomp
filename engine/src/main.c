@@ -103,23 +103,32 @@ static const char *g_look_script;   /* --look-script: scripted free-look camera 
 static const char *g_stop_level;    /* --stop-level: end the run when the chain enters this file */
 static long g_demo_loops;           /* --demo-loops: headless stop after N attract passes (0 = never) */
 
-/* --keys "F5@300,F2@900": headless function-key presses at the given ticks. */
-#define MAX_KEYS 16
+/* --keys "F5@300,F2@900,ESC@1200": headless function-key presses at the given ticks. */
+#define MAX_KEYS 64
 static struct { long tick; int key; } g_keys[MAX_KEYS];
 static int g_nkeys;
 
 static int parse_keys(const char *s)
 {
     while (*s && g_nkeys < MAX_KEYS) {
-        int k;
-        if (!strncmp(s, "F2@", 3)) k = 2; else if (!strncmp(s, "F5@", 3)) k = 5; else return -1;
+        int k, l = 3;
+        if (!strncmp(s, "F2@", 3)) k = 2; else if (!strncmp(s, "F5@", 3)) k = 5;
+        else if (!strncmp(s, "ESC@", 4)) { k = 1; l = 4; } else return -1;
         char *e;
-        g_keys[g_nkeys].tick = strtol(s + 3, &e, 10);
-        if (e == s + 3) return -1;
+        g_keys[g_nkeys].tick = strtol(s + l, &e, 10);
+        if (e == s + l) return -1;
         g_keys[g_nkeys++].key = k;
         s = *e == ',' ? e + 1 : e;
         if (*e && *e != ',') return -1;
     }
+    return 0;
+}
+
+/* Esc (the game's skip key) scripted for this tick. */
+static int esc_key(long tick)
+{
+    for (int i = 0; i < g_nkeys; i++)
+        if (g_keys[i].tick == tick && g_keys[i].key == 1) return 1;
     return 0;
 }
 
@@ -128,7 +137,7 @@ static int fkeys(Chain *c, long tick, uint32_t plat)
 {
     int j = 0;
     for (int i = 0; i < g_nkeys; i++)
-        if (g_keys[i].tick == tick) plat |= g_keys[i].key == 2 ? PLAT_KEY_F2 : PLAT_KEY_F5;
+        if (g_keys[i].tick == tick) plat |= g_keys[i].key == 1 ? 0 : g_keys[i].key == 2 ? PLAT_KEY_F2 : PLAT_KEY_F5;
     if (plat & PLAT_KEY_F5) j |= chain_restart_level(c);
     if (plat & PLAT_KEY_F2) j |= chain_to_hub(c);
     return j;
@@ -142,14 +151,31 @@ static int stop_level_reached(const Chain *c)
 #define AHEAD 10   /* groups read ahead of the one on screen (~3.3 s of audio) */
 
 typedef struct {
-    uint64_t audio_put;        /* bytes of audio handed to the platform */
+    uint64_t audio_put;        /* bytes of audio handed to the platform since the last flush */
+    uint64_t clock_base_ms;    /* audio clock origin: video time of the first frame after the last flush */
+    const long *frame_no;      /* next video tick to be shown */
     int pace;
 } AudioSink;
 
+/* --av-check: A/V sync measured against the (virtual) audio device, see av_sample(). */
+static int g_av_check;
+static struct { long frames, flushes; double min, max, jmax; int since; } g_av;
+
+/* Audio is emitted when a group is read. A jump (branch, skip, F2/F5) drops the ring; chain_fill then
+ * calls this with pcm == NULL right before the first new group's audio: drop what is queued and restart
+ * the audio clock at the video tick that group starts on (the ring is empty, so that is the next tick
+ * to show). Frames and audio then stay in step exactly across jumps, with no drift. */
 static void sink_audio(void *ud, const uint8_t *pcm, size_t n)
 {
     AudioSink *a = ud;
     if (!a->pace) return;
+    if (!pcm) {
+        plat_audio_clear();
+        a->audio_put = 0;
+        a->clock_base_ms = (uint64_t)*a->frame_no * 1000 / L96_VIDEO_FPS;
+        g_av.flushes++; g_av.since = 0;
+        return;
+    }
     plat_audio_queue(pcm, n);
     a->audio_put += n;
 }
@@ -241,6 +267,7 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
     plat_text_input(0);
     plat_skip_requested(); plat_act_requested(); plat_any_input(); plat_take_keys();
     p->sink.pace = pace;
+    p->sink.frame_no = &p->frame_no;
     p->pace = pace;
     p->max_frames = max_frames;
     return 0;
@@ -248,6 +275,21 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
 
 /* One iteration of the player. Returns nonzero when playback is over. */
 static unsigned g_presented;   /* video frames handed to plat_present (dt_frames() on the web) */
+
+/* For the frame just shown: where the device is in the played stream (bytes since the last flush) minus
+ * where the frame belongs (its group's start plus its tick within the group, 5 ticks per 1/3 s group). */
+static void av_sample(const Player *p)
+{
+    int gi, vf;
+    chain_shown(p->c, &gi, &vf);
+    double want = (gi * L96_FRAMES_PER_GROUP + vf) * 1000.0 / L96_VIDEO_FPS;
+    double have = (double)(p->sink.audio_put - plat_audio_queued()) * 1000.0 / (L96_AUDIO_RATE * 2);
+    double d = have - want;
+    if (!g_av.frames || d < g_av.min) g_av.min = d;
+    if (!g_av.frames || d > g_av.max) g_av.max = d;
+    if (g_av.since++ < 30 && (d > g_av.jmax || -d > g_av.jmax)) g_av.jmax = d > 0 ? d : -d;   /* first 2 s after a jump */
+    g_av.frames++;
+}
 
 static int play_tick(Player *p)
 {
@@ -272,19 +314,10 @@ static int play_tick(Player *p)
         return 0;
     }
     if (g_cx.demo && plat_any_input()) return 1;   /* any key / click ends the attract loop */
-    if (plat_skip_requested()) {
-        int r = chain_skip(c);
-        if (r == 2) return 1;
-        if (r == 1 && p->pace) {
-            /* Rebase so the audio clock stays continuous after dropping the queue. */
-            p->sink.audio_put -= plat_audio_queued();
-            plat_audio_clear();
-        }
+    if (plat_skip_requested() || esc_key(p->frame_no)) {
+        if (chain_skip(c) == 2) return 1;
     }
-    if (fkeys(c, p->frame_no, pk) && p->pace) {
-        p->sink.audio_put -= plat_audio_queued();
-        plat_audio_clear();
-    }
+    fkeys(c, p->frame_no, pk);
     if (!p->ended && chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; return 1; }
     if (p->max_frames && p->frame_no >= p->max_frames) return 1;   /* --count: stop right there */
 
@@ -296,7 +329,7 @@ static int play_tick(Player *p)
     }
     /* Audio clock: bytes the device has consumed, in milliseconds. */
     uint64_t played = p->sink.audio_put - plat_audio_queued();
-    uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
+    uint64_t clock_ms = p->sink.clock_base_ms + played * 1000 / (L96_AUDIO_RATE * 2);
 
     /* Decode every tick that is due (late ones are decoded, only the newest shown). */
     int shown = 0;
@@ -305,10 +338,8 @@ static int play_tick(Player *p)
         int img = 0, r = chain_step(c, &img, sink_audio, &p->sink);
         if (r < 0) { p->rc = 1; break; }
         if (r == 0) { p->ended = 1; break; }
-        if (chain_take_jump(c) && p->pace) {      /* death / kill branch dropped buffered groups */
-            p->sink.audio_put -= plat_audio_queued();
-            plat_audio_clear();
-        }
+        chain_take_jump(c);
+        if (g_av_check && p->pace) av_sample(p);
         p->frame_no++;
         if (p->game && g_cx.max_deaths && game_stats(p->game)->deaths >= g_cx.max_deaths) { p->ended = 1; break; }
         if (img) shown = 1;
@@ -324,6 +355,10 @@ static int g_keep_window;   /* native menu: the window outlives a game (menu -> 
 static int play_finish(Player *p)
 {
     fprintf(stderr, "sequence: %s\n", chain_history(p->c));
+    if (g_av_check)
+        fprintf(stderr, "av-check: %ld frames, %ld audio flushes (jumps), audio position minus frame time: "
+                "min %.1f ms, max %.1f ms (frame = 66.7 ms), worst within 2 s of a jump %.1f ms\n",
+                g_av.frames, g_av.flushes, g_av.min, g_av.max, g_av.jmax);
     if (p->game) game_print_stats(p->game, stderr);
     chain_close(p->c);
     game_free(p->game);
@@ -597,6 +632,7 @@ static int run_headless(const ChainOpts *co0, const char *outdir, long max_frame
     int rc = 0;
     while (!(max_frames && tick >= max_frames)) {
         fkeys(c, tick, 0);
+        if (esc_key(tick)) chain_skip(c);
         int img = 0, r = chain_step(c, &img, NULL, NULL);
         if (r < 0) { rc = 1; break; }
         if (r == 0) break;
@@ -648,6 +684,7 @@ static void usage(void)
         "  --dump-frames DIR  headless: write composited frames as PPM\n"
         "  --every N          with --dump-frames: write every Nth tick only\n"
         "  --headless         run the chain with no window, audio or output (prints the sequence)\n"
+        "  --av-check         headless build: paced run against a simulated audio device, reports the A/V offset\n"
         "  --no-pace          windowed: run as fast as possible, no audio\n"
         "  --one-level        stop when the chain leaves the starting file\n"
         "  --chain            with --file: follow the scene graph after the segment\n"
@@ -708,6 +745,10 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--no-menu")) menu_flag = -1;
         else if (!strcmp(a, "--headless")) headless = 1;
         else if (!strcmp(a, "--no-pace")) pace = 0;
+        else if (!strcmp(a, "--av-check")) {
+            if (plat_virtual_audio(1) != 0) { fprintf(stderr, "--av-check needs the headless (DT_HEADLESS) build\n"); return 2; }
+            g_av_check = 1;
+        }
         else if (!strcmp(a, "--one-level")) one_level = 1;
         else if (!strcmp(a, "--chain")) chain = 1;
         else if (!strcmp(a, "--verbose")) verbose = 1;

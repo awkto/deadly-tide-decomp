@@ -1,23 +1,23 @@
 # Deadly Tide — decomp / port plan
 
-Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#6.
+Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#7.
 
-## Status (2026-11-04)
+## Status (2026-11-07)
 
 | # | Step | State |
 |---|------|-------|
 | 1 | `.L96` container format | **done** — `docs/L96_FORMAT.md`, `tools/l96.py` |
 | 2 | Asset dump | **done** — all 29 files, 413 segments, ~92 min video; private copy in `dump/`; CD4 music as FLAC |
-| 3 | Decompile `DTPLAYER.EXE` | done for everything the port needs: `docs/ENGINE_MAP.md`, `SCENE_GRAPH.md`, `GAMEPLAY_DATA.md`, `COMBAT_SPEC.md`, `FREELOOK_SPEC.md` |
-| 4 | Original under Wine | **works** — see `tools/wine/README.md`; LEVEL01 combat compared side by side with the port: HUD, crosshair, palette, sprites, explosions match |
-| 5 | C + SDL3 engine | feature-complete: combat, free-look 3D, hub mission select, saves, demo mode; bot finishes the whole game; windowed mouse/keyboard play tested under Xvfb + xdotool |
-| 5b | Launcher (DT.EXE) | documented (`docs/LAUNCHER.md`); the Pilot Control Center is rebuilt in the engine from the user's own DT.EXE bitmaps (native) |
-| 6 | WASM build | works in Chrome: lazy File.slice reads (Asyncify, 64MB heap for any level), level/full/demo start, difficulty, mouse combat, 15 fps |
+| 3 | Decompile `DTPLAYER.EXE` | **done** — `docs/COVERAGE.md`: of the game's own code 93.8% (by size) is documented, 99.9% understood; the one unexplained function is dead code. Specs: `ENGINE_MAP`, `SCENE_GRAPH`, `GAMEPLAY_DATA`, `COMBAT_SPEC`, `FREELOOK_SPEC`, `LAUNCHER` |
+| 4 | Original under Wine | **works** — LEVEL01 compared with the port: HUD, palette, sprites match; segment timing identical; idle-player death time matches (median ~42 s vs 40–51 s); enemy-fire model audited against the code |
+| 5 | C + SDL3 engine | feature-complete: combat, free-look 3D, hub mission select, saves, demo mode; bot finishes the whole game; mouse, gamepad, fullscreen, pause/help/mute/screenshot keys; first-run data-folder picker; CI builds Linux/Windows/macOS |
+| 5b | Launcher (DT.EXE) | documented (`docs/LAUNCHER.md`); the Pilot Control Center is rebuilt in the engine from the user's own DT.EXE bitmaps, native and web |
+| 6 | WASM build | works in Chrome: lazy File.slice reads (Asyncify, 64MB heap for any level), launcher/level/full/demo start, folder drop, pilots in localStorage, mouse combat, 15 fps |
 
 ## Next
-1. Finer timing/damage comparison with the original (scripted identical input in both; first-enemy time looked ~8 s vs ~10 s, unverified).
-2. Web: AudioWorklet instead of the deprecated ScriptProcessorNode (SDL), mobile/touch input, a hosted page (code only, user supplies files).
-3. Real-user play testing for difficulty balance. CI (GitHub Actions) builds Linux/Windows/macOS/wasm; tag v* for a release.
+1. Real-user play testing (mouse feel, difficulty, audio sync on real speakers: a test rig measured ~0.9 s audio lag, likely its virtual sound device).
+2. First release: tag `v0.1.0` (CI attaches Linux/Windows/macOS/web zips, no game data).
+3. Optional: a hosted web page (code only; users pick their own files); 16-bit tint blend (`Px_Plot16Tinted`); START button animation details (sprite classes not decompiled).
 
 ## What the game actually is
 

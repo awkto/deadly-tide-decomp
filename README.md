@@ -56,8 +56,9 @@ and combat stats) or `--dump-frames OUT --every 15`.
 
 ## Build (browser)
 With emsdk: `emcmake cmake -S engine -B build/wasm && cmake --build build/wasm`, serve `build/wasm/`
-over HTTP, open `index.html`, pick your `.L96` files (all of them, for the full game), choose a start mode
-and difficulty, press Play.
+over HTTP, open `index.html`, pick (or drag in a whole folder of) your `.L96` files and `DT.EXE`, choose a start
+mode (the original launcher screen, full game, a single level, or the demo) and difficulty, press Play.
+Files are read lazily from your disk and never uploaded; pilots are kept in the browser's localStorage.
 
 ## Prebuilt binaries / CI
 GitHub Actions (`.github/workflows/build.yml`) builds Linux, Windows (MSVC), macOS and the browser (WebAssembly)

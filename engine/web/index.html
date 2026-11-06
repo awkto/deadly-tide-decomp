@@ -72,11 +72,23 @@ function setPlaying(on, label) {
   if (on) canvas.focus();
 }
 
-// ---- canvas aspect: 4:3 launcher picture vs 8:5 (320x200) game; follows the backing size ----
-function aspect() {
-  const w = canvas.width, h = canvas.height;
-  return (w === 300 && h === 150) || !w || !h ? 1.6 : w / h;   // 300x150 = untouched default canvas
+// ---- canvas aspect: 4:3 launcher picture vs 8:5 (320x200) game ----
+// SDL keeps the canvas backing size equal to its CSS size and letterboxes the logical frame inside,
+// so the backing size says nothing. The frame size is visible as the size of the texture the engine
+// uploads each frame; watch those WebGL calls (no C change needed).
+let frameAR = 1.6;
+function noteFrame(w, h) {
+  if (w < 300 || h < 180 || w / h === frameAR) return;
+  frameAR = w / h; fit();
 }
+for (const C of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
+  if (!C) continue;
+  for (const [fn, i] of [['texImage2D', 3], ['texSubImage2D', 4]]) {
+    const orig = C.prototype[fn];
+    C.prototype[fn] = function (...a) { if (typeof a[i] === 'number') noteFrame(a[i], a[i + 1]); return orig.apply(this, a); };
+  }
+}
+const aspect = () => frameAR;
 function fit() {
   if (document.fullscreenElement) { canvas.style.width = canvas.style.height = ''; return; }   // CSS :fullscreen takes over
   const ar = aspect();
@@ -87,7 +99,6 @@ function fit() {
   canvas.style.width = w + 'px';
   canvas.style.height = Math.round(w / ar) + 'px';
 }
-new MutationObserver(fit).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
 window.addEventListener('resize', fit);
 document.addEventListener('fullscreenchange', () => { fit(); canvas.focus(); });
 $('fs').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else canvas.requestFullscreen().catch(e => log('fullscreen: ' + e.message)); canvas.focus(); };

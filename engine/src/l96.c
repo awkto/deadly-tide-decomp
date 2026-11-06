@@ -118,6 +118,9 @@ static size_t entry_bytes(const uint8_t *e)
     return ((size_t)e[0] + e[1] + e[2] + e[3]) * L96_SECTOR;
 }
 
+#define WHERE_VIRTUAL (-1)   /* L96Segment.where: assembled from carry sectors */
+#define WHERE_BAD     (-2)   /* before the start of the file: unreadable */
+
 /* Compute the physical offset of every group of a segment (see docs section 6). */
 static int layout_segment(const L96File *f, L96Segment *sg)
 {
@@ -130,8 +133,8 @@ static int layout_segment(const L96File *f, L96Segment *sg)
         int64_t o = sg->offset;
         for (int k = 0; k < skip - 1 && k < n; k++) o -= (int64_t)entry_bytes(es + 8 * k);
         for (int k = 0; k < n; k++) {
-            if (k == skip - 1 || k == n - 1) { sg->where[k] = -1; continue; }
-            sg->where[k] = o;
+            if (k == skip - 1 || k == n - 1) { sg->where[k] = WHERE_VIRTUAL; continue; }
+            sg->where[k] = o < 0 ? WHERE_BAD : o;   /* a corrupt offset must not look like a virtual group */
             o += (int64_t)entry_bytes(es + 8 * k);
         }
     } else {
@@ -157,6 +160,13 @@ int l96_open(L96File *f, const char *path)
     f->n_names    = rd32(h + 0x18);
     f->n_segments = rd32(h + 0x2c);
     f->n_index    = rd32(h + 0x3c);
+    {   /* The tables must fit in the file: refuse absurd counts before allocating for them. */
+        uint64_t fsz = f->rd.size ? f->rd.size(f->rd.ctx) : UINT64_MAX;
+        if ((uint64_t)f->n_names * 8 > fsz || (uint64_t)f->n_index * 8 > fsz ||
+            (uint64_t)f->n_segments * L96_SEGMENT_RECORD > fsz) {
+            fprintf(stderr, "l96: %s: table sizes exceed the file\n", path); goto fail;
+        }
+    }
     uint32_t off_names = rd32(h + 0x40), off_pal = rd32(h + 0x48);
     uint32_t off_segs = rd32(h + 0x5c), off_index = rd32(h + 0x6c);
 
@@ -241,6 +251,7 @@ int l96_read_group(const L96File *f, int s, int k, L96Group *g)
     if (k < 0 || k >= sg->count) return -1;
     const uint8_t *e = f->index + 8 * (size_t)(sg->first + k);
 
+    if (sg->where[k] == WHERE_BAD) return -1;
     if (sg->where[k] >= 0) {
         g->size = entry_bytes(e);
         g->raw = malloc(g->size ? g->size : 1);

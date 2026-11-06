@@ -194,7 +194,7 @@ Chain *chain_open(const ChainOpts *o)
     c->gs = scene_default_state();
     scene_srand(o->seed);
     stem_of(o->level, c->start_stem);
-    if (open_level(c, c->start_stem) != 0) { free(c); return NULL; }
+    if (open_level(c, c->start_stem) != 0) { chain_close(c); return NULL; }
     if (o->from_seg < 0 || (uint32_t)o->from_seg >= c->f.n_segments) {
         fprintf(stderr, "chain: segment %d out of range (%s has %u)\n", o->from_seg, c->stem, c->f.n_segments);
         chain_close(c); return NULL;

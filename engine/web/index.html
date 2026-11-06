@@ -90,14 +90,16 @@ for (const C of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
 }
 const aspect = () => frameAR;
 function fit() {
-  if (document.fullscreenElement) { canvas.style.width = canvas.style.height = ''; return; }   // CSS :fullscreen takes over
+  if (document.fullscreenElement) { canvas.style.width = canvas.style.height = ''; window.dispatchEvent(new Event('resize')); return; }   // CSS :fullscreen takes over
   const ar = aspect();
   const availW = $('stage').clientWidth - 4;
   const availH = Math.max(160, window.innerHeight - canvas.getBoundingClientRect().top - 70);   // room for help line
   let w = Math.min(availW, availH * ar);
   w = Math.max(160, Math.floor(w));
-  canvas.style.width = w + 'px';
-  canvas.style.height = Math.round(w / ar) + 'px';
+  const cw = w + 'px', ch = Math.round(w / ar) + 'px';
+  if (canvas.style.width === cw && canvas.style.height === ch) return;
+  canvas.style.width = cw; canvas.style.height = ch;
+  window.dispatchEvent(new Event('resize'));   // SDL re-syncs the canvas backing size to its CSS size on window resize
 }
 window.addEventListener('resize', fit);
 document.addEventListener('fullscreenchange', () => { fit(); canvas.focus(); });

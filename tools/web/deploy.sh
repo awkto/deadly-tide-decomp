@@ -10,3 +10,6 @@ done
 mkdir -p "$2"
 for f in deadlytide.wasm deadlytide.js index.html; do cp "$1/$f" "$2/$f.tmp" && mv "$2/$f.tmp" "$2/$f"; done
 echo "deployed to $2"
+# Private/LAN deployment with bundled data (never on a public host): serve the user's .L96 files and DT.EXE
+# under /data/ (no gzip, so Range requests work) with data/manifest.json =
+#   [{"name":"LOGOS.L96","path":"LOGOS.L96","size":8364032}, ...]; the page then loads them automatically.

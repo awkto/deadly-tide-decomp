@@ -12,10 +12,11 @@
  #log{font:12px monospace;color:#999;white-space:pre-wrap;max-width:640px;margin:0 auto;text-align:left}
 </style></head><body>
 <h2>Deadly Tide (1996) - web player</h2>
-<p>Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96). Nothing is uploaded; files stay in your browser.</p>
+<p>Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96), plus <code>DT.EXE</code> for the original launcher menu. Nothing is uploaded; files stay in your browser.</p>
 <div id="drop">
- <input id="files" type="file" multiple accept=".l96,.L96"> or drop files here<br><br>
+ <input id="files" type="file" multiple accept=".l96,.L96,.exe,.EXE"> or drop files here<br><br>
  <label>Start: <select id="mode">
+   <option value="3">Launcher (original menu; needs DT.EXE)</option>
    <option value="0">Level from segment</option>
    <option value="1">Full game (from LOGOS)</option>
    <option value="2">Demo (attract)</option>
@@ -35,15 +36,17 @@
 const $ = id => document.getElementById(id);
 const logEl = $('log');
 const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; };
-let runtimeReady = false, playing = false, segBusy = false;
+let hasExe = false, runtimeReady = false, playing = false, segBusy = false;
 const loaded = {};   // name -> true (registered)
 
 var Module = {
   l96Files: {},
+  textInput: false,   // set by the engine while SDL text input is on (launcher name entry)
   canvas: $('canvas'),
   print: t => log(t),
   printErr: t => { console.warn(t); log('[err] ' + t); },   // surfaces engine stderr (e.g. missing .L96)
   onRuntimeInitialized() { runtimeReady = true; log('engine ready'); },
+  onLauncherDone() { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('Launcher closed'); },
   onPlayerDone(rc) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('segment finished, rc=' + rc); },
 };
 
@@ -51,12 +54,16 @@ async function addFiles(list) {
   if (!runtimeReady) { log('engine still loading, try again'); return; }
   for (const f of list) {
     const name = f.name.toUpperCase();
+    if (name === 'DT.EXE') {   // launcher art: read fully (~2.7 MB) when the launcher starts
+      Module.l96Files[name] = f; hasExe = true; $('mode').value = '3'; syncMode(); log('loaded DT.EXE (' + (f.size >> 10) + ' KB)'); continue;
+    }
     if (!name.endsWith('.L96')) { log('skipping ' + f.name); continue; }
     Module.l96Files[name] = f;   // read lazily via File.slice(); no copy
     if (!loaded[name]) { loaded[name] = true; const o = document.createElement('option'); o.value = o.textContent = name; $('file').appendChild(o); }
     log('loaded ' + name + ' (' + (f.size >> 10) + ' KB)');
   }
-  if (Object.keys(loaded).length) { $('play').disabled = false; await refreshSegs(); }
+  if (Object.keys(loaded).length || hasExe) $('play').disabled = false;
+  if (Object.keys(loaded).length) await refreshSegs();
 }
 async function refreshSegs() {
   if (!runtimeReady || playing || segBusy) return;   // Asyncify allows one async call at a time
@@ -69,6 +76,7 @@ async function refreshSegs() {
 }
 function syncMode() {
   const fromLevel = $('mode').value === '0';
+  $('difficulty').disabled = $('mode').value === '3';   // the launcher has its own per-pilot difficulty
   $('file').disabled = $('seg').disabled = !fromLevel;
 }
 $('files').onchange = e => addFiles(e.target.files);
@@ -83,6 +91,14 @@ $('canvas').addEventListener('click', () => $('canvas').focus());
 $('play').onclick = () => {   // user gesture: lets the browser start audio
   if (playing || segBusy || !runtimeReady) return;
   const mode = +$('mode').value;
+  if (mode === 3) {
+    if (!hasExe) { log('pick DT.EXE from CD1 first'); return; }
+    playing = true; $('play').disabled = true; $('play').textContent = 'Launcher...'; $('canvas').focus();
+    Module.ccall('dt_launcher', 'number', [], [], { async: true }).then(rc => {
+      if (rc < 0) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('dt_launcher failed: ' + rc); }
+    });
+    return;
+  }
   const level = mode === 0 ? $('file').value : 'LOGOS';
   const seg = mode === 0 ? +$('seg').value : 0;
   playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; $('canvas').focus();
@@ -95,6 +111,7 @@ $('play').onclick = () => {   // user gesture: lets the browser start audio
 // uses the absolute mouse position over the canvas, so no pointer lock is wanted.
 window.addEventListener('keydown', e => {
   if (!playing) return;
+  if (Module.textInput) return;   // launcher text entry (ADD): letters, space, Backspace, Enter must reach SDL
   if (e.key === 'F5' || e.key === 'F2' || e.key === ' ' || e.key === 'Spacebar') e.preventDefault();
 }, { capture: true });
 </script>

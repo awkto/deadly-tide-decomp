@@ -45,4 +45,7 @@ int  save_delete_pilot(const char *path, const char *pilot);
 int  save_get_current(const char *path, char *out, int n);
 int  save_set_current(const char *path, const char *pilot);
 
+/* Called with the file path after every successful rewrite (web build: copy the INI to localStorage). */
+void save_set_hook(void (*fn)(const char *path));
+
 #endif

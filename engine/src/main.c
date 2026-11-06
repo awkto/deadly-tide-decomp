@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "chain.h"
 #include "game.h"
 #include "input.h"
@@ -238,43 +242,14 @@ static int play_finish(Player *p)
     return p->rc;
 }
 
-#ifndef __EMSCRIPTEN__
-static int play(const ChainOpts *co, int scale, long max_frames, int pace)
+/* Pacing sleep: the browser build must yield to the event loop (Asyncify); native just sleeps. */
+static void wait_ms(uint32_t ms)
 {
-    Player p;
-    if (play_init(&p, co, scale, max_frames, pace) != 0) return 1;
-    while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
-    return play_finish(&p);
-}
-
-/* ---- Launcher screen (native windowed build) ---------------------------------------------
- * The original DT.EXE launcher ("Pilot Control Center", docs/LAUNCHER.md) is drawn by menu.c at
- * 640x480; START applies the pilot's settings and plays the game, which returns to the menu when
- * it ends. Closing the window quits everything; so does EXIT -> YES. */
-
-/* DT.EXE in the data dir or its cd1/ (any case); 1 = found. */
-static int find_dt_exe(const char *data, char *out, size_t n)
-{
-    char sub[1100];
-    if (plat_find_file(data, "DT.EXE", out, n)) return 1;
-    snprintf(sub, sizeof sub, "%s/cd1", data);
-    if (plat_find_file(sub, "DT.EXE", out, n)) return 1;
-    snprintf(sub, sizeof sub, "%s/CD1", data);
-    return plat_find_file(sub, "DT.EXE", out, n);
-}
-
-static uint8_t *slurp(const char *path, size_t *n)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    uint8_t *b = NULL;
-    long l = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
-    if (l > 0 && fseek(f, 0, SEEK_SET) == 0 && (b = malloc((size_t)l)) != NULL && fread(b, 1, (size_t)l, f) != (size_t)l) {
-        free(b); b = NULL;
-    }
-    fclose(f);
-    *n = b ? (size_t)l : 0;
-    return b;
+#ifdef __EMSCRIPTEN__
+    emscripten_sleep(ms);
+#else
+    plat_delay_ms(ms);
+#endif
 }
 
 static int is_demo_pilot(const char *s)
@@ -323,7 +298,7 @@ static int menu_run(Menu *m, MenuResult *res)
             menu_draw(m, fb);
             plat_present(fb, MENU_W, MENU_H);
         }
-        plat_delay_ms(4);
+        wait_ms(4);
     }
 }
 
@@ -347,18 +322,15 @@ static void menu_apply(const MenuResult *r, const char *path, SaveData *sv, Chai
     co->save = demo ? NULL : sv;
 }
 
-/* menu -> game -> menu until quit. */
-static int run_menu(const ChainOpts *co0, const char *dt_exe, const char *path, int scale, long max_frames, int pace)
+/* menu -> game -> menu until quit (or EXIT). The window is created here and closed on return. */
+static int menu_session(const ChainOpts *co0, const uint8_t *exe, size_t n, const char *path, int scale, long max_frames, int pace)
 {
-    size_t n;
-    uint8_t *exe = slurp(dt_exe, &n);
-    if (!exe) { fprintf(stderr, "cannot read %s\n", dt_exe); return 1; }
-    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) { free(exe); return 1; }
+    if (plat_init(CHAIN_W, CHAIN_H, scale, L96_AUDIO_RATE, "Deadly Tide") != 0) return 1;
     g_keep_window = 1;
     int rc = 0;
     for (;;) {
         Menu *m = menu_create(exe, n, path);      /* fresh each time: the game changed the pilot's progress */
-        if (!m) { fprintf(stderr, "cannot load the launcher art from %s\n", dt_exe); rc = 1; break; }
+        if (!m) { fprintf(stderr, "cannot load the launcher art from DT.EXE\n"); rc = 1; break; }
         MenuResult res;
         int quit = menu_run(m, &res);
         menu_free(m);
@@ -368,13 +340,63 @@ static int run_menu(const ChainOpts *co0, const char *dt_exe, const char *path, 
         menu_apply(&res, path, &sv, &co);
         Player p;
         if (play_init(&p, &co, scale, max_frames, pace) != 0) { rc = 1; break; }
-        while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
+        while (!play_tick(&p)) wait_ms(p.ended ? 10 : p.pace ? 2 : 1);
         play_finish(&p);
         plat_audio_clear();
         if (plat_close_requested()) break;
     }
-    free(exe);
+    g_keep_window = 0;
     plat_shutdown();
+    return rc;
+}
+
+#ifndef __EMSCRIPTEN__
+static int play(const ChainOpts *co, int scale, long max_frames, int pace)
+{
+    Player p;
+    if (play_init(&p, co, scale, max_frames, pace) != 0) return 1;
+    while (!play_tick(&p)) plat_delay_ms(p.ended ? 10 : p.pace ? 2 : 1);
+    return play_finish(&p);
+}
+
+/* ---- Launcher screen (native windowed build) ---------------------------------------------
+ * The original DT.EXE launcher ("Pilot Control Center", docs/LAUNCHER.md) is drawn by menu.c at
+ * 640x480; START applies the pilot's settings and plays the game, which returns to the menu when
+ * it ends. Closing the window quits everything; so does EXIT -> YES. */
+
+/* DT.EXE in the data dir or its cd1/ (any case); 1 = found. */
+static int find_dt_exe(const char *data, char *out, size_t n)
+{
+    char sub[1100];
+    if (plat_find_file(data, "DT.EXE", out, n)) return 1;
+    snprintf(sub, sizeof sub, "%s/cd1", data);
+    if (plat_find_file(sub, "DT.EXE", out, n)) return 1;
+    snprintf(sub, sizeof sub, "%s/CD1", data);
+    return plat_find_file(sub, "DT.EXE", out, n);
+}
+
+static uint8_t *slurp(const char *path, size_t *n)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    uint8_t *b = NULL;
+    long l = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (l > 0 && fseek(f, 0, SEEK_SET) == 0 && (b = malloc((size_t)l)) != NULL && fread(b, 1, (size_t)l, f) != (size_t)l) {
+        free(b); b = NULL;
+    }
+    fclose(f);
+    *n = b ? (size_t)l : 0;
+    return b;
+}
+
+/* Native launcher entry: read DT.EXE, then the shared menu session. */
+static int run_menu(const ChainOpts *co0, const char *dt_exe, const char *path, int scale, long max_frames, int pace)
+{
+    size_t n;
+    uint8_t *exe = slurp(dt_exe, &n);
+    if (!exe) { fprintf(stderr, "cannot read %s\n", dt_exe); return 1; }
+    int rc = menu_session(co0, exe, n, path, scale, max_frames, pace);
+    free(exe);
     return rc;
 }
 

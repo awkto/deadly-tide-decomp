@@ -2,6 +2,9 @@
 #include "platform.h"
 
 #include <SDL3/SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <stdio.h>
 
 static SDL_Window      *g_win;
@@ -273,6 +276,9 @@ void plat_text_input(int on)
     if (!g_win) return;
     if (on) SDL_StartTextInput(g_win); else SDL_StopTextInput(g_win);
     g_text[0] = 0; g_mkeys = 0; g_mpress = g_mrel = 0;
+#ifdef __EMSCRIPTEN__
+    emscripten_run_script(on ? "Module.textInput=true" : "Module.textInput=false");   /* index.html key handling */
+#endif
 }
 
 void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, int *released, int *down)

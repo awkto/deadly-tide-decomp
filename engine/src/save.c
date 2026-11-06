@@ -70,6 +70,9 @@ void save_load(SaveData *s, const char *path, const char *pilot)
 
 /* Rewrite `path`: drop the pilot section `skip_pilot` and the section with header `skip_hdr` (either may
  * be NULL) plus comments / blank lines, keep the rest, then append `add` (may be NULL). */
+static void (*g_hook)(const char *path);
+void save_set_hook(void (*fn)(const char *path)) { g_hook = fn; }
+
 static int rewrite(const char *path, const char *skip_pilot, const char *skip_hdr, const char *add)
 {
     char *keep = NULL;
@@ -113,6 +116,7 @@ static int rewrite(const char *path, const char *skip_pilot, const char *skip_hd
         remove(path);
         if (rename(tmp, path) != 0) { remove(tmp); return -1; }
     }
+    if (g_hook) g_hook(path);
     return 0;
 }
 

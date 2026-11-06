@@ -123,4 +123,62 @@ int dt_start(const char *level, int seg, int difficulty, int start_mode)
     return rc;
 }
 
+/* ---- Launcher (the original "Pilot Control Center", menu.c) ------------------------------
+ * Pilots live in an INI in MEMFS (/save/deadlytide.ini, the same file the native build uses);
+ * every successful save.c rewrite copies it to localStorage, and it is restored before the menu loads. */
+#define WEB_SAVE_PATH "/save/deadlytide.ini"
+
+EM_JS(void, js_save_restore, (const char *path), {
+    var p = UTF8ToString(path);
+    try { FS.mkdir('/save'); } catch (e) {}
+    try {
+        var v = localStorage.getItem('dt_save_ini');
+        if (v) FS.writeFile(p, v); else { try { FS.unlink(p); } catch (e) {} }
+    } catch (e) { console.warn('save restore failed', e); }
+})
+EM_JS(void, js_save_persist, (const char *path), {
+    try { localStorage.setItem('dt_save_ini', FS.readFile(UTF8ToString(path), { encoding: 'utf8' })); }
+    catch (e) { console.warn('save persist failed', e); }
+})
+
+/* Read a whole registered File (e.g. DT.EXE) into a malloc'd buffer; NULL if not registered / unreadable. */
+static uint8_t *web_slurp(const char *name, size_t *n)
+{
+    L96Reader r;
+    if (web_l96_open(name, &r) != 0) return NULL;
+    size_t sz = (size_t)web_rd_size(r.ctx);
+    uint8_t *b = sz ? malloc(sz) : NULL;
+    if (b && web_rd_read(r.ctx, 0, b, sz) != 0) { free(b); b = NULL; }
+    web_rd_close(r.ctx);
+    *n = b ? sz : 0;
+    return b;
+}
+
+/* Run the launcher until EXIT -> YES (menu -> game -> menu, as native run_menu). Returns 0, or <0 on
+ * error (-1 busy, -2 DT.EXE missing, -3 launcher failed). */
+EMSCRIPTEN_KEEPALIVE
+int dt_launcher(void)
+{
+    if (g_running) return -1;
+    size_t n;
+    uint8_t *exe = web_slurp("DT.EXE", &n);
+    if (!exe) return -2;
+    (void)parse_keys;
+    (void)stop_level_reached;
+    (void)g_demo_loops;
+    g_running = 1;
+    l96_set_open_fn(web_l96_open);
+    js_save_restore(WEB_SAVE_PATH);
+    save_set_hook(js_save_persist);
+    ChainOpts co;
+    memset(&co, 0, sizeof co);
+    co.data_dir = "";
+    co.seed = (uint32_t)emscripten_get_now();
+    int rc = menu_session(&co, exe, n, WEB_SAVE_PATH, 2, 0, 1);
+    free(exe);
+    g_running = 0;
+    emscripten_run_script("if (Module.onLauncherDone) Module.onLauncherDone()");
+    return rc ? -3 : 0;
+}
+
 int main(void) { return 0; }   /* runtime stays alive; JS drives dt_start() */

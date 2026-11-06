@@ -86,7 +86,7 @@ if(EMSCRIPTEN)
   set_target_properties(deadlytide PROPERTIES SUFFIX ".js")
   target_link_options(deadlytide PRIVATE
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=2GB
-    "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_dt_frames,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_dt_launcher,_dt_frames,_malloc,_free"
     "-sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8"
     -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=65536 -sSTACK_SIZE=1MB -O2)
   add_custom_command(TARGET deadlytide POST_BUILD

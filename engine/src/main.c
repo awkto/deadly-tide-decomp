@@ -423,15 +423,17 @@ static int resolve_data(char *out, size_t n, int force_choose, int interactive)
     if (!force_choose)
         plat_message("Deadly Tide - game files needed",
             "Deadly Tide needs the game files from your original CDs.\n\n"
-            "Copy all the .L96 files and DT.EXE from the 4 CDs into one folder (or keep the CDs as "
-            "cd1, cd2, cd3 and cd4 subfolders), then pick that folder on the next screen.\n\n"
+            "Copy all the .L96 files and DT.EXE from the 4 CDs into one folder\n"
+            "(or keep the CDs as cd1, cd2, cd3 and cd4 subfolders),\n"
+            "then pick that folder on the next screen.\n\n"
             "The choice is remembered for next time.");
     for (;;) {
         if (!plat_choose_folder(plat_base_dir(), out, n)) return 0;
         if (dir_has_data(out)) { conf_save(out); return 1; }
         plat_message("Deadly Tide - not the right folder",
-            "No game files (LOGOS.L96 or LEVEL01.L96) were found in that folder or its cd1..cd4 "
-            "subfolders.\n\nYou will be asked to pick a folder again; close the dialog to quit.");
+            "No game files (LOGOS.L96 or LEVEL01.L96) were found in that folder\n"
+            "or its cd1..cd4 subfolders.\n\n"
+            "You will be asked to pick a folder again; cancel the dialog to quit.");
     }
 }
 

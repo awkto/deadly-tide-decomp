@@ -108,7 +108,8 @@ static int read_vectors(CinepakDecoder *d, int sidx, int id, const uint8_t *p, s
             pos += 4; bits = 32; } \
         (out) = (mask >> 31) & 1u; mask <<= 1; bits--; } while (0)
 
-    for (int y = y0; y < y1; y += 4) {
+    /* A corrupt strip height can start a block row off a 4-line boundary: never paint past the frame. */
+    for (int y = y0; y < y1 && y + 4 <= d->height; y += 4) {
         for (int x = x0; x < x1; x += 4) {
             unsigned use_v4 = 0, coded = 1;
             if (id == 0x30) {

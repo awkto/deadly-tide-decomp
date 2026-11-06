@@ -32,6 +32,13 @@ void   plat_audio_clear(void);   /* drop everything queued (branch / skip) */
 int  plat_mouse(int *x, int *y, uint32_t *buttons);
 /* First joystick, if any: axes -32768..32767, buttons bits 0..2 = buttons 1..3. 0 = none. */
 int  plat_joystick(int *x, int *y, uint32_t *buttons);
+/* First SDL_Gamepad, if one is connected AND has taken over from the mouse (stick moved past the
+ * deadzone or a button pressed, until the mouse moves again). x,y: left stick, deadzoned and
+ * rescaled to -32767..32767 (up = negative y); buttons: bit 0 fire (A / right trigger), bit 2 ACT
+ * (B, X or left trigger). Start counts as Esc, Back as F2 (plat_skip_requested / plat_take_keys). */
+int  plat_gamepad(int *x, int *y, uint32_t *buttons);
+/* Borderless desktop fullscreen on/off (F11 and Alt+Enter toggle it inside plat_quit_requested). */
+void plat_set_fullscreen(int on);
 /* Nonzero once per Space press seen by plat_quit_requested() (the ACT key). */
 int  plat_act_requested(void);
 /* Nonzero once per any key-down or mouse-button-down seen by plat_quit_requested() (demo exit). */

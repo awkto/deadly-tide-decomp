@@ -55,6 +55,15 @@ static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState
         if (!g_flip) io->y = CHAIN_H - 1 - io->y;
         io->buttons |= b;
     }
+    if (plat_gamepad(&x, &y, &b)) {
+        /* Gamepad: like the original joystick the stick maps ABSOLUTELY onto the frame (§3.1: no
+         * rate, centre = middle of the screen), with a deadzone. Unlike the original's flight-style
+         * default, up is up; FlipControl restores the flight-style inversion. */
+        io->x = (x + 32768) * CHAIN_W / 65536;
+        io->y = (y + 32768) * CHAIN_H / 65536;
+        if (g_flip) io->y = CHAIN_H - 1 - io->y;
+        io->buttons = (io->buttons & IN_CTRL) | b;
+    }
     if (plat_act_requested()) io->act = 1;
 }
 
@@ -502,6 +511,7 @@ static void usage(void)
         "  --demo             attract mode: start at LOGOS, bot + god, loop LEVEL01 back to LOGOS\n"
         "                     (windowed: any key or click quits; headless: see --demo-loops)\n"
         "  --demo-loops N     headless demo: stop after N passes back to LOGOS (default 1)\n"
+        "  --fullscreen       start in borderless fullscreen (F11 / Alt+Enter toggle)\n"
         "combat:\n"
         "  --bot              aimbot input (default when headless)\n"
         "  --idle             never fire\n"
@@ -519,6 +529,7 @@ int main(int argc, char **argv)
 {
     const char *data = ".", *file = NULL, *level = NULL, *dump = NULL;
     int seg = 0, scale = 3, every = 1, headless = 0, pace = 1, one_level = 0, chain = 0, verbose = 0, auto_look = 0;
+    int fullscreen = 0;
     int menu_flag = 0;   /* 1 --menu, -1 --no-menu */
     int hub_between = 0, set_highest = -1, set_sp = -1, diff_given = 0;
     const char *save_path = NULL, *pilot = "Player";
@@ -532,6 +543,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--file") && more) file = argv[++i];
         else if (!strcmp(a, "--level") && more) level = argv[++i];
         else if ((!strcmp(a, "--segment") || !strcmp(a, "--from-seg")) && more) seg = atoi(argv[++i]);
+        else if (!strcmp(a, "--fullscreen")) fullscreen = 1;
         else if (!strcmp(a, "--scale") && more) scale = atoi(argv[++i]);
         else if (!strcmp(a, "--count") && more) count = atol(argv[++i]);
         else if (!strcmp(a, "--dump-frames") && more) dump = argv[++i];
@@ -566,6 +578,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--look-script") && more) g_look_script = argv[++i];
         else { usage(); return 2; }
     }
+    if (fullscreen) plat_set_fullscreen(1);   /* applied when the window opens */
     /* Launcher screen: windowed, no explicit level/file/demo. */
     char dt_exe[1100] = "";
     int want_menu = 0;

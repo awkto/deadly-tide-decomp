@@ -28,6 +28,8 @@ size_t plat_audio_queued(void) { return 0; }
 void plat_audio_flush(void) {}
 void plat_audio_clear(void) {}
 
+int  plat_gamepad(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
+void plat_set_fullscreen(int on) { (void)on; }
 int  plat_mouse(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
 int  plat_joystick(int *x, int *y, uint32_t *buttons) { (void)x; (void)y; (void)buttons; return 0; }
 int  plat_act_requested(void) { return 0; }

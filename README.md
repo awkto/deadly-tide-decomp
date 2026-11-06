@@ -33,6 +33,10 @@ build/native/deadlytide --data /path/to/game --level LEVEL00 # mission select gl
 With the original `DT.EXE` in the data folder (or its `cd1/`), the game opens with the original
 launcher screen (pilots, controls, difficulty, volume), drawn from your own `DT.EXE`; `--no-menu` skips it.
 Mouse aims and fires, Space fires the ACT secondary weapon, Esc skips, F2 = hub, F5 = restart level,
+F11 or Alt+Enter toggles borderless fullscreen (`--fullscreen` starts in it). A gamepad works too (hot-plug,
+first one used; any stick motion or button takes over from the mouse until it moves): left stick aims
+(absolute, like the original joystick), A or right trigger fires, B/X/left trigger = ACT, Start = Esc, Back = F2;
+in the launcher the stick moves the cursor and A clicks, D-pad up/down selects.
 Q quits. Options: `--difficulty 0|1|2`, `--pilot NAME`, `--scale N`; `--help` lists everything.
 
 Headless build without SDL (for testing): `cmake -S engine -B build/headless -DDT_HEADLESS=ON`, then e.g.

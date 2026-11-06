@@ -17,6 +17,14 @@ static int              g_skip, g_act, g_any_input;
 static uint32_t         g_keys;
 static int              g_frame_w = 320, g_frame_h = 200;
 static SDL_Joystick    *g_joy;
+static SDL_Gamepad     *g_pad;          /* first SDL_Gamepad (hot-plugged) */
+static int              g_pad_active;   /* the pad has taken over from the mouse (until it moves) */
+static int              g_pad_btn_prev; /* A, for the menu click edges */
+static int              g_warp_pending; /* mouse-motion events caused by our own warps */
+static int              g_menu_mode;    /* plat_text_input(1): the launcher screen is up */
+static int              g_fullscreen;
+static float            g_cur_x, g_cur_y;   /* menu cursor in picture coordinates */
+#define PAD_DEAD 6500   /* ~20% of the stick range */
 static int              g_closed, g_vol = 255;
 static char             g_text[64];
 static unsigned         g_mkeys;
@@ -51,8 +59,54 @@ static void SDLCALL sfx_fill(void *ud, SDL_AudioStream *s, int additional, int t
     }
 }
 
+/* Open the first connected gamepad if none is open. */
+static void pad_open_first(void)
+{
+    if (g_pad) return;
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&n);
+    if (ids && n > 0) g_pad = SDL_OpenGamepad(ids[0]);
+    SDL_free(ids);
+}
+
+/* TEST ONLY: DT_TEST_VPAD=1 attaches a virtual gamepad and drives a scripted stick/button
+ * sequence from plat_quit_requested() (used to verify the gamepad path without hardware). */
+static SDL_Joystick *g_vpad;
+static void test_vpad_attach(void)
+{
+    if (!SDL_getenv("DT_TEST_VPAD")) return;
+    SDL_VirtualJoystickDesc d;
+    SDL_INIT_INTERFACE(&d);
+    d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    d.name = "DT test pad";
+    SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+    if (id) g_vpad = SDL_OpenJoystick(id);
+}
+static void test_vpad_script(void)
+{
+    if (!g_vpad) return;
+    static uint64_t t0;
+    if (!t0) t0 = SDL_GetTicks();
+    unsigned s = (unsigned)((SDL_GetTicks() - t0) / 1000);   /* seconds since first poll */
+    int lx = 0, ly = 0, a = 0, rt = -32768, b = 0;   /* triggers rest at the axis minimum */
+    if (s >= 2 && s < 4) lx = 32767;                         /* stick right */
+    if (s >= 4 && s < 6) { lx = -32768; ly = -32768; a = s == 5; }   /* up-left, A fires */
+    if (s >= 6 && s < 8) { lx = 32767; ly = 32767; rt = 32767; }     /* down-right, RT fires */
+    if (s >= 8 && s < 10) b = 1;                             /* B = ACT */
+    SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFTX, (Sint16)lx);
+    SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFTY, (Sint16)ly);
+    SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, (Sint16)rt);
+    SDL_SetJoystickVirtualAxis(g_vpad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, (Sint16)-32768);
+    SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_SOUTH, a != 0);
+    SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_EAST, b != 0);
+    if (s == 11) SDL_SetJoystickVirtualButton(g_vpad, SDL_GAMEPAD_BUTTON_START, true);
+}
+
 int plat_init(int w, int h, int scale, int audio_rate, const char *title)
 {
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -63,6 +117,7 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
     }
     /* Integer-scaled nearest-neighbour presentation of the logical frame. */
     SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    if (g_fullscreen) SDL_SetWindowFullscreen(g_win, true);
     SDL_HideCursor();   /* the game draws its own crosshair; the original hides the OS cursor */
 
     /* One logical device with two bound streams: the video soundtrack (U8 stereo) and the SFX
@@ -86,11 +141,14 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
     plat_set_volume(g_vol);
     g_frame_w = w; g_frame_h = h;
 
-    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK)) {
+    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD)) {
         int n = 0;
         SDL_JoystickID *ids = SDL_GetJoysticks(&n);
-        if (ids && n > 0) g_joy = SDL_OpenJoystick(ids[0]);
+        for (int i = 0; ids && i < n && !g_joy; i++)      /* gamepads go through SDL_Gamepad */
+            if (!SDL_IsGamepad(ids[i])) g_joy = SDL_OpenJoystick(ids[i]);
         SDL_free(ids);
+        pad_open_first();
+        test_vpad_attach();
     }
     return 0;
 }
@@ -102,6 +160,10 @@ void plat_shutdown(void)
     for (int i = 0; i < N_VOICES; i++) { SDL_free(g_voice[i].buf); g_voice[i] = (Voice){ 0 }; }
     if (g_joy) SDL_CloseJoystick(g_joy);
     g_joy = NULL;
+    if (g_pad) SDL_CloseGamepad(g_pad);
+    g_pad = NULL;
+    if (g_vpad) SDL_CloseJoystick(g_vpad);
+    g_vpad = NULL;
     if (g_audio) SDL_DestroyAudioStream(g_audio);
     if (g_audio_dev) SDL_CloseAudioDevice(g_audio_dev);
     g_audio_dev = 0;
@@ -133,7 +195,35 @@ int plat_quit_requested(void)
 {
     SDL_Event ev;
     int quit = 0;
+    int warps = g_warp_pending;     /* motion events our own SDL_WarpMouseInWindow() will cause */
+    g_warp_pending = 0;
+    test_vpad_script();
     while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+            if (warps > 0) warps--; else g_pad_active = 0;     /* the mouse takes back over */
+        }
+        if (ev.type == SDL_EVENT_GAMEPAD_ADDED) pad_open_first();
+        if (ev.type == SDL_EVENT_GAMEPAD_REMOVED && g_pad && SDL_GetGamepadID(g_pad) == ev.gdevice.which) {
+            SDL_CloseGamepad(g_pad);
+            g_pad = NULL; g_pad_active = 0;
+            pad_open_first();
+        }
+        if (g_pad && ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && ev.gbutton.which == SDL_GetGamepadID(g_pad)) {
+            g_pad_active = 1; g_any_input = 1;
+            if (ev.gbutton.button == SDL_GAMEPAD_BUTTON_START) g_skip = 1;
+            if (ev.gbutton.button == SDL_GAMEPAD_BUTTON_BACK) g_keys |= PLAT_KEY_F2;
+            if (ev.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) g_mkeys |= PLAT_MK_UP;
+            if (ev.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) g_mkeys |= PLAT_MK_DOWN;
+        }
+        if (g_pad && ev.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && ev.gaxis.which == SDL_GetGamepadID(g_pad) &&
+            (ev.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX || ev.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) &&
+            (ev.gaxis.value > PAD_DEAD || ev.gaxis.value < -PAD_DEAD))
+            g_pad_active = 1;
+        if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat &&
+            (ev.key.key == SDLK_F11 || ((ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) && (ev.key.mod & SDL_KMOD_ALT)))) {
+            plat_set_fullscreen(!g_fullscreen);
+            continue;               /* not a menu Enter / any-key */
+        }
         if (ev.type == SDL_EVENT_QUIT) { quit = 1; g_closed = 1; }
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q && !(g_win && SDL_TextInputActive(g_win)))
             quit = 1;
@@ -207,6 +297,37 @@ int plat_mouse(int *x, int *y, uint32_t *buttons)
     return 1;
 }
 
+/* One deadzoned stick axis: 0 inside the zone, rescaled to the full range outside. */
+static int pad_axis(SDL_GamepadAxis a)
+{
+    int v = SDL_GetGamepadAxis(g_pad, a);
+    if (v > -PAD_DEAD && v < PAD_DEAD) return 0;
+    int m = v < 0 ? -v : v;
+    m = (m - PAD_DEAD) * 32767 / (32767 - PAD_DEAD);
+    if (m > 32767) m = 32767;
+    return v < 0 ? -m : m;
+}
+
+int plat_gamepad(int *x, int *y, uint32_t *buttons)
+{
+    if (!g_pad || !g_pad_active) return 0;
+    *x = pad_axis(SDL_GAMEPAD_AXIS_LEFTX);
+    *y = pad_axis(SDL_GAMEPAD_AXIS_LEFTY);
+    uint32_t b = 0;
+    if (SDL_GetGamepadButton(g_pad, SDL_GAMEPAD_BUTTON_SOUTH) ||
+        SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= 1u;
+    if (SDL_GetGamepadButton(g_pad, SDL_GAMEPAD_BUTTON_EAST) || SDL_GetGamepadButton(g_pad, SDL_GAMEPAD_BUTTON_WEST) ||
+        SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= 4u;
+    *buttons = b;
+    return 1;
+}
+
+void plat_set_fullscreen(int on)
+{
+    g_fullscreen = on != 0;
+    if (g_win) SDL_SetWindowFullscreen(g_win, g_fullscreen);   /* borderless desktop fullscreen */
+}
+
 int plat_joystick(int *x, int *y, uint32_t *buttons)
 {
     if (!g_joy) return 0;
@@ -275,6 +396,7 @@ void plat_text_input(int on)
 {
     if (!g_win) return;
     if (on) SDL_StartTextInput(g_win); else SDL_StopTextInput(g_win);
+    g_menu_mode = on;
     g_text[0] = 0; g_mkeys = 0; g_mpress = g_mrel = 0;
 #ifdef __EMSCRIPTEN__
     emscripten_run_script(on ? "Module.textInput=true" : "Module.textInput=false");   /* index.html key handling */
@@ -283,6 +405,27 @@ void plat_text_input(int on)
 
 void plat_take_menu_input(char *text, size_t n, unsigned *keys, int *pressed, int *released, int *down)
 {
+    if (g_menu_mode && g_pad && g_ren) {
+        /* Gamepad in the launcher: the left stick moves the (real) mouse cursor at a rate, A clicks. */
+        int sx = pad_axis(SDL_GAMEPAD_AXIS_LEFTX), sy = pad_axis(SDL_GAMEPAD_AXIS_LEFTY);
+        int a = SDL_GetGamepadButton(g_pad, SDL_GAMEPAD_BUTTON_SOUTH) != 0;
+        if (sx || sy) {
+            float wx, wy;
+            SDL_GetMouseState(&wx, &wy);
+            if (!SDL_RenderCoordinatesFromWindow(g_ren, wx, wy, &g_cur_x, &g_cur_y)) g_cur_x = g_cur_y = 0;
+            g_cur_x += (float)sx / 32767.0f * 10.0f;       /* up to 10 picture px per tick */
+            g_cur_y += (float)sy / 32767.0f * 10.0f;
+            g_cur_x = g_cur_x < 0 ? 0 : g_cur_x > (float)(g_frame_w - 1) ? (float)(g_frame_w - 1) : g_cur_x;
+            g_cur_y = g_cur_y < 0 ? 0 : g_cur_y > (float)(g_frame_h - 1) ? (float)(g_frame_h - 1) : g_cur_y;
+            if (SDL_RenderCoordinatesToWindow(g_ren, g_cur_x, g_cur_y, &wx, &wy)) {
+                SDL_WarpMouseInWindow(g_win, wx, wy);
+                g_warp_pending++;
+            }
+        }
+        if (a && !g_pad_btn_prev) { g_mpress = 1; g_mdown = 1; }
+        if (!a && g_pad_btn_prev) { g_mrel = 1; g_mdown = 0; }
+        g_pad_btn_prev = a;
+    }
     if (n) SDL_strlcpy(text, g_text, n);
     g_text[0] = 0;
     *keys = g_mkeys; g_mkeys = 0;

@@ -55,6 +55,7 @@ Headless build without SDL (for testing): `cmake -S engine -B build/headless -DD
 and combat stats) or `--dump-frames OUT --every 15`.
 
 ## Build (browser)
+Playable build: https://tide.pro.dnsif.ca (bring your own CD files; nothing is uploaded).
 With emsdk: `emcmake cmake -S engine -B build/wasm && cmake --build build/wasm`, serve `build/wasm/`
 over HTTP, open `index.html`, pick (or drag in a whole folder of) your `.L96` files and `DT.EXE`, choose a start
 mode (the original launcher screen, full game, a single level, or the demo) and difficulty, press Play.

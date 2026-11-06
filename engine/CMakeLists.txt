@@ -80,6 +80,17 @@ if(NOT EMSCRIPTEN)
   endif()
 endif()
 
+# Fuzz harnesses (libFuzzer; configure with CC=clang -DDT_FUZZ=ON). Dev only.
+option(DT_FUZZ "Build libFuzzer harnesses (clang)" OFF)
+if(DT_FUZZ)
+  foreach(t fuzz_l96 fuzz_cinepak fuzz_peres)
+    add_executable(${t} tools/${t}.c)
+    target_link_libraries(${t} PRIVATE dtcore)
+    target_compile_options(${t} PRIVATE ${DT_WARN} -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
+    target_link_options(${t} PRIVATE -fsanitize=fuzzer,address,undefined)
+  endforeach()
+endif()
+
 if(EMSCRIPTEN)
   # Browser build: deadlytide.js + deadlytide.wasm, driven by web/index.html. The user's own
   # .L96 files stay as JS File objects (lazy slice reads); JS calls dt_start() from the Play click.

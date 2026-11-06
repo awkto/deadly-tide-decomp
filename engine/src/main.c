@@ -162,7 +162,19 @@ typedef struct {
     int pace, rc, drain_ticks, ended;
     int paused, help;          /* Pause/F3/focus loss; F1 help page over the paused frame */
     unsigned pause_tick;
+    uint64_t clock_base_ms;    /* audio clock origin: video time at the last audio rebase */
 } Player;
+
+/* Drop the queued audio (a jump / skip / key dropped buffered groups) and restart the audio clock at
+ * the video position of `next_frame`, so frames and audio stay in step. Subtracting the dropped bytes
+ * instead lost the audio of groups that were filled but not yet shown, and the video ran ahead of the
+ * clock by a group each time until the read-ahead could no longer cover the gap: a permanent stall. */
+static void audio_rebase(Player *p, long next_frame)
+{
+    plat_audio_clear();
+    p->sink.audio_put = 0;
+    p->clock_base_ms = (uint64_t)next_frame * 1000 / L96_VIDEO_FPS;
+}
 
 /* ---- Pause / help overlays, F4 mute, F12 screenshot (WM_KEYDOWN F1/F3/F4/F12 + WM_ACTIVATEAPP) ---- */
 static int g_muted, g_unmuted_vol = 255;
@@ -277,14 +289,10 @@ static int play_tick(Player *p)
         if (r == 2) return 1;
         if (r == 1 && p->pace) {
             /* Rebase so the audio clock stays continuous after dropping the queue. */
-            p->sink.audio_put -= plat_audio_queued();
-            plat_audio_clear();
+            audio_rebase(p, p->frame_no);
         }
     }
-    if (fkeys(c, p->frame_no, pk) && p->pace) {
-        p->sink.audio_put -= plat_audio_queued();
-        plat_audio_clear();
-    }
+    if (fkeys(c, p->frame_no, pk) && p->pace) audio_rebase(p, p->frame_no);
     if (!p->ended && chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; return 1; }
     if (p->max_frames && p->frame_no >= p->max_frames) return 1;   /* --count: stop right there */
 
@@ -296,7 +304,7 @@ static int play_tick(Player *p)
     }
     /* Audio clock: bytes the device has consumed, in milliseconds. */
     uint64_t played = p->sink.audio_put - plat_audio_queued();
-    uint64_t clock_ms = played * 1000 / (L96_AUDIO_RATE * 2);
+    uint64_t clock_ms = p->clock_base_ms + played * 1000 / (L96_AUDIO_RATE * 2);
 
     /* Decode every tick that is due (late ones are decoded, only the newest shown). */
     int shown = 0;
@@ -305,10 +313,8 @@ static int play_tick(Player *p)
         int img = 0, r = chain_step(c, &img, sink_audio, &p->sink);
         if (r < 0) { p->rc = 1; break; }
         if (r == 0) { p->ended = 1; break; }
-        if (chain_take_jump(c) && p->pace) {      /* death / kill branch dropped buffered groups */
-            p->sink.audio_put -= plat_audio_queued();
-            plat_audio_clear();
-        }
+        if (chain_take_jump(c) && p->pace)        /* death / kill branch dropped buffered groups */
+            audio_rebase(p, p->frame_no + 1);
         p->frame_no++;
         if (p->game && g_cx.max_deaths && game_stats(p->game)->deaths >= g_cx.max_deaths) { p->ended = 1; break; }
         if (img) shown = 1;

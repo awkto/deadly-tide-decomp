@@ -4,17 +4,25 @@
 <title>Deadly Tide (1996) - web player</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
- body{background:#111;color:#ccc;font:14px system-ui,sans-serif;margin:0;padding:16px;text-align:center}
- #drop{border:2px dashed #666;padding:16px;margin:0 auto 12px;max-width:640px}
- #drop.over{border-color:#6cf}
+ body{background:#111;color:#ccc;font:14px system-ui,sans-serif;margin:0;padding:12px;text-align:center}
+ h2{margin:4px 0 8px}
+ #drop{border:2px dashed #666;padding:12px;margin:0 auto 8px;max-width:700px}
+ #drop.over,body.over #drop{border-color:#6cf}
  label{margin:0 6px}
- canvas{display:block;margin:12px auto;width:640px;max-width:100%;aspect-ratio:8/5;background:#000;image-rendering:pixelated;image-rendering:crisp-edges;outline:none}
- #log{font:12px monospace;color:#999;white-space:pre-wrap;max-width:640px;margin:0 auto;text-align:left}
+ #bar{display:none;max-width:700px;margin:0 auto 6px;font-size:13px}
+ body.playing #drop,body.playing #intro{display:none}
+ body.playing #bar{display:block}
+ #err{color:#f88;min-height:1.2em;margin:4px auto;max-width:700px}
+ #stage{display:flex;justify-content:center}
+ canvas{display:block;background:#000;image-rendering:pixelated;image-rendering:crisp-edges;outline:none;width:640px;height:400px}
+ canvas:fullscreen{width:100%;height:100%;object-fit:contain}
+ #help{font-size:12px;color:#999;margin:6px auto;max-width:700px}
+ #log{font:12px monospace;color:#999;white-space:pre-wrap;max-width:700px;margin:0 auto;text-align:left;max-height:8em;overflow:auto}
 </style></head><body>
 <h2>Deadly Tide (1996) - web player</h2>
-<p>Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96), plus <code>DT.EXE</code> for the original launcher menu. Nothing is uploaded; files stay in your browser.</p>
+<p id="intro">Pick your own <code>.L96</code> files from the game CD (e.g. LOGOS.L96, LEVEL01.L96), plus <code>DT.EXE</code> for the original launcher menu. You can also drop a whole CD folder (cd1..cd4 subfolders are fine). Nothing is uploaded; files stay in your browser.</p>
 <div id="drop">
- <input id="files" type="file" multiple accept=".l96,.L96,.exe,.EXE"> or drop files here<br><br>
+ <input id="files" type="file" multiple accept=".l96,.L96,.exe,.EXE"> or drop files / a folder here<br><br>
  <label>Start: <select id="mode">
    <option value="3">Launcher (original menu; needs DT.EXE)</option>
    <option value="0">Level from segment</option>
@@ -30,39 +38,119 @@
  <label>Segment: <select id="seg"></select></label>
  <button id="play" disabled>Play</button>
 </div>
-<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="bar"><span id="status">Playing</span> &nbsp; <button id="fs" title="Fullscreen (or press F11 in the browser)">Fullscreen</button> <small>(F11 also works)</small></div>
+<div id="err"></div>
+<div id="stage"><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas></div>
+<div id="help">Mouse: aim and fire &middot; Space: ACT &middot; Esc: skip &middot; F2: hub &middot; Q: quit &middot; gamepad supported</div>
 <div id="log"></div>
 <script>
 const $ = id => document.getElementById(id);
-const logEl = $('log');
-const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; };
+const logEl = $('log'), canvas = $('canvas');
+const log = (...a) => { logEl.textContent += a.join(' ') + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+const showErr = t => { $('err').textContent = t; if (t) log('[error] ' + t); };
 let hasExe = false, runtimeReady = false, playing = false, segBusy = false;
 const loaded = {};   // name -> true (registered)
 
 var Module = {
   l96Files: {},
   textInput: false,   // set by the engine while SDL text input is on (launcher name entry)
-  canvas: $('canvas'),
+  canvas,
   print: t => log(t),
   printErr: t => { console.warn(t); log('[err] ' + t); },   // surfaces engine stderr (e.g. missing .L96)
-  onRuntimeInitialized() { runtimeReady = true; log('engine ready'); },
-  onLauncherDone() { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('Launcher closed'); },
-  onPlayerDone(rc) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('segment finished, rc=' + rc); },
+  onRuntimeInitialized() { runtimeReady = true; $('play').disabled = false; log('engine ready'); },
+  onLauncherDone() { setPlaying(false); log('Launcher closed'); },
+  onPlayerDone(rc) { setPlaying(false); log('segment finished, rc=' + rc); },
 };
+
+// ---- play state: the setup panel collapses into a small bar while playing ----
+function setPlaying(on, label) {
+  playing = on;
+  document.body.classList.toggle('playing', on);
+  $('play').disabled = on || !runtimeReady;
+  if (label) $('status').textContent = label;
+  fit();
+  if (on) canvas.focus();
+}
+
+// ---- canvas aspect: 4:3 launcher picture vs 8:5 (320x200) game; follows the backing size ----
+function aspect() {
+  const w = canvas.width, h = canvas.height;
+  return (w === 300 && h === 150) || !w || !h ? 1.6 : w / h;   // 300x150 = untouched default canvas
+}
+function fit() {
+  if (document.fullscreenElement) { canvas.style.width = canvas.style.height = ''; return; }   // CSS :fullscreen takes over
+  const ar = aspect();
+  const availW = $('stage').clientWidth - 4;
+  const availH = Math.max(160, window.innerHeight - canvas.getBoundingClientRect().top - 70);   // room for help line
+  let w = Math.min(availW, availH * ar);
+  w = Math.max(160, Math.floor(w));
+  canvas.style.width = w + 'px';
+  canvas.style.height = Math.round(w / ar) + 'px';
+}
+new MutationObserver(fit).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
+window.addEventListener('resize', fit);
+document.addEventListener('fullscreenchange', () => { fit(); canvas.focus(); });
+$('fs').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else canvas.requestFullscreen().catch(e => log('fullscreen: ' + e.message)); canvas.focus(); };
+
+// ---- remembered start settings ----
+const PREF = 'dt_web_prefs';
+let prefs = {};
+try { prefs = JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) {}
+function savePrefs() { try { localStorage.setItem(PREF, JSON.stringify({ mode: $('mode').value, difficulty: $('difficulty').value })); } catch (e) {} }
+if (prefs.mode !== undefined && $('mode').querySelector('option[value="' + prefs.mode + '"]')) $('mode').value = prefs.mode;
+if (prefs.difficulty !== undefined && $('difficulty').querySelector('option[value="' + prefs.difficulty + '"]')) $('difficulty').value = prefs.difficulty;
+
+// ---- file intake ----
+const wanted = name => name === 'DT.EXE' || name.endsWith('.L96');
+// Dedupe by upper-case name (cd1..cd4 copies of the same file); the first one wins.
+function dedupe(files) {
+  const seen = {}, out = [];
+  for (const f of files) { const n = f.name.toUpperCase(); if (!seen[n]) { seen[n] = 1; out.push(f); } }
+  return out;
+}
+const entryFile = e => new Promise((res, rej) => e.file(res, rej));
+// Recursively collect wanted files from a FileSystemEntry (file or directory).
+async function walkEntry(entry, out = []) {
+  if (entry.isFile) {
+    if (wanted(entry.name.toUpperCase())) out.push(await entryFile(entry));
+  } else if (entry.isDirectory) {
+    const rd = entry.createReader();
+    for (;;) {   // readEntries returns batches (max ~100) until empty
+      const batch = await new Promise((res, rej) => rd.readEntries(res, rej));
+      if (!batch.length) break;
+      for (const e of batch) await walkEntry(e, out);
+    }
+  }
+  return out;
+}
+async function filesFromDrop(dt) {
+  const items = [...(dt.items || [])];
+  if (items.length && items[0].webkitGetAsEntry) {
+    const entries = items.map(i => i.webkitGetAsEntry()).filter(Boolean);   // must be taken synchronously
+    const out = [];
+    for (const e of entries) await walkEntry(e, out);
+    return out;
+  }
+  return [...dt.files];
+}
 
 async function addFiles(list) {
   if (!runtimeReady) { log('engine still loading, try again'); return; }
+  showErr('');
+  list = dedupe([...list]);
   for (const f of list) {
     const name = f.name.toUpperCase();
     if (name === 'DT.EXE') {   // launcher art: read fully (~2.7 MB) when the launcher starts
-      Module.l96Files[name] = f; hasExe = true; $('mode').value = '3'; syncMode(); log('loaded DT.EXE (' + (f.size >> 10) + ' KB)'); continue;
+      Module.l96Files[name] = f; hasExe = true;
+      if (prefs.mode === undefined) $('mode').value = '3';
+      syncMode(); log('loaded DT.EXE (' + (f.size >> 10) + ' KB)'); continue;
     }
     if (!name.endsWith('.L96')) { log('skipping ' + f.name); continue; }
     Module.l96Files[name] = f;   // read lazily via File.slice(); no copy
     if (!loaded[name]) { loaded[name] = true; const o = document.createElement('option'); o.value = o.textContent = name; $('file').appendChild(o); }
     log('loaded ' + name + ' (' + (f.size >> 10) + ' KB)');
   }
-  if (Object.keys(loaded).length || hasExe) $('play').disabled = false;
+  if (!list.length) showErr('No .L96 files or DT.EXE found in what you picked.');
   if (Object.keys(loaded).length) await refreshSegs();
 }
 async function refreshSegs() {
@@ -81,39 +169,55 @@ function syncMode() {
 }
 $('files').onchange = e => addFiles(e.target.files);
 $('file').onchange = refreshSegs;
-$('mode').onchange = syncMode;
+$('mode').onchange = () => { syncMode(); savePrefs(); };
+$('difficulty').onchange = savePrefs;
 syncMode();
-const drop = $('drop');
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
-$('canvas').addEventListener('click', () => $('canvas').focus());
+const dropZone = document.body;
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('over'); };
+dropZone.ondragleave = e => { if (!e.relatedTarget) dropZone.classList.remove('over'); };
+dropZone.ondrop = async e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  if (playing) return;
+  addFiles(await filesFromDrop(e.dataTransfer));
+};
+canvas.addEventListener('click', () => canvas.focus());
+
+// Which of the picked files a start mode needs; returns an error string or ''.
+function missingFor(mode) {
+  const levels = Object.keys(loaded).filter(n => /^LEVEL/.test(n));
+  if (mode === 3) return hasExe ? '' : 'The launcher needs DT.EXE from CD1. Pick it (or drop the CD folder) first.';
+  if (mode === 0) return $('file').value ? '' : 'No .L96 files picked. Pick LEVELxx.L96 from the CD (e.g. LEVEL01.L96) to play a level.';
+  if (!loaded['LOGOS.L96']) return 'LOGOS.L96 is missing. The ' + (mode === 1 ? 'full game' : 'demo') + ' starts from LOGOS.L96 (CD1); pick it first.';
+  if (mode === 1 && !levels.length) return 'No LEVELxx.L96 files picked. The full game needs the LEVEL files from the CD as well as LOGOS.L96.';
+  return '';
+}
 $('play').onclick = () => {   // user gesture: lets the browser start audio
   if (playing || segBusy || !runtimeReady) return;
   const mode = +$('mode').value;
+  const err = missingFor(mode);
+  showErr(err);
+  if (err) return;
+  savePrefs();
+  const fail = (what, rc) => { setPlaying(false); log(what + ' failed: ' + rc); };
   if (mode === 3) {
-    if (!hasExe) { log('pick DT.EXE from CD1 first'); return; }
-    playing = true; $('play').disabled = true; $('play').textContent = 'Launcher...'; $('canvas').focus();
-    Module.ccall('dt_launcher', 'number', [], [], { async: true }).then(rc => {
-      if (rc < 0) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('dt_launcher failed: ' + rc); }
-    });
+    setPlaying(true, 'Launcher');
+    Module.ccall('dt_launcher', 'number', [], [], { async: true }).then(rc => { if (rc < 0) fail('dt_launcher', rc); });
     return;
   }
   const level = mode === 0 ? $('file').value : 'LOGOS';
   const seg = mode === 0 ? +$('seg').value : 0;
-  playing = true; $('play').disabled = true; $('play').textContent = 'Playing...'; $('canvas').focus();
+  setPlaying(true, mode === 0 ? 'Playing ' + level + ' seg ' + seg : mode === 1 ? 'Playing full game' : 'Demo');
   Module.ccall('dt_start', 'number', ['string', 'number', 'number', 'number'],
-               [level, seg, +$('difficulty').value, mode], { async: true }).then(rc => {
-    if (rc < 0) { playing = false; $('play').disabled = false; $('play').textContent = 'Play'; log('dt_start failed: ' + rc); }
-  });
+               [level, seg, +$('difficulty').value, mode], { async: true }).then(rc => { if (rc < 0) fail('dt_start', rc); });
 };
 // While the game runs keep F5 (reload), F2 and Space (page scroll) for the engine. The engine
-// uses the absolute mouse position over the canvas, so no pointer lock is wanted.
+// uses the absolute mouse position over the canvas, so no pointer lock is wanted. F11 stays with the browser.
 window.addEventListener('keydown', e => {
   if (!playing) return;
   if (Module.textInput) return;   // launcher text entry (ADD): letters, space, Backspace, Enter must reach SDL
   if (e.key === 'F5' || e.key === 'F2' || e.key === ' ' || e.key === 'Spacebar') e.preventDefault();
 }, { capture: true });
+fit();
 </script>
 <script src="deadlytide.js"></script>
 </body></html>

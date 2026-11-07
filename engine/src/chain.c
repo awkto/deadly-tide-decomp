@@ -50,7 +50,9 @@ struct Chain {
     int  nblocks;
     CinepakDecoder dec;
     int  dec_ready;
-    uint32_t frame[CHAIN_W * CHAIN_H];
+    uint32_t frame[CHAIN_W * CHAIN_H];   /* full composite (scene + UI) */
+    uint32_t scene[CHAIN_W * CHAIN_H];   /* picture without the UI */
+    uint32_t ovl[CHAIN_W * CHAIN_H];     /* UI, alpha 255 where drawn */
     long ticks, last_esc;
     int  jumped;
     int  groups_shown;             /* groups fully shown since the last ring drop (audio flush) */
@@ -684,7 +686,15 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
         drawn = 1;
     }
 
-    if (c->o.game) game_frame_post(c->o.game, blk, fhdr, c->frame, drawn && si->type != SEG_PANO);
+    int layered = 0;
+    if (c->o.game) {
+        GameLayers lay = { c->scene, c->ovl };
+        layered = game_frame_post(c->o.game, blk, fhdr, c->frame, drawn && si->type != SEG_PANO, &lay);
+    }
+    if (drawn && !layered) {     /* no combat layer (or a pano tick): the whole picture is scene */
+        memcpy(c->scene, c->frame, sizeof c->scene);
+        memset(c->ovl, 0, sizeof c->ovl);
+    }
     if (freelook) freelook_update(c, s, blk);
 
     c->ticks++;
@@ -699,6 +709,8 @@ int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud)
 }
 
 const uint32_t *chain_frame(const Chain *c) { return c->frame; }
+const uint32_t *chain_scene(const Chain *c) { return c->scene; }
+const uint32_t *chain_overlay(const Chain *c) { return c->ovl; }
 const char *chain_level(const Chain *c) { return c->stem; }
 int chain_segment(const Chain *c) { return c->disp_seg >= 0 ? c->disp_seg : c->rseg; }
 int chain_demo_loops(const Chain *c) { return c->demo_loops; }

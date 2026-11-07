@@ -29,6 +29,12 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
 
 void plat_shutdown(void) {}
 void plat_present(const uint32_t *xrgb, int w, int h) { (void)xrgb; (void)w; (void)h; }
+void plat_set_filter(int filter) { (void)filter; }
+int  plat_vsync(void) { return 0; }
+void plat_present_layers(const uint32_t *scene, const uint32_t *ovl, int w, int h)
+{
+    (void)scene; (void)ovl; (void)w; (void)h;
+}
 int  plat_quit_requested(void) { return !g_virt; }
 int  plat_skip_requested(void) { return 0; }
 int  plat_audio_queue(const uint8_t *data, size_t n) { (void)data; g_virt_queued += n; return 0; }

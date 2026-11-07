@@ -16,6 +16,16 @@ void plat_shutdown(void);
 /* Show a w*h XRGB8888 frame (scaled nearest, aspect kept). w/h may change between calls. */
 void plat_present(const uint32_t *xrgb, int w, int h);
 
+/* Scene-layer filter for plat_present_layers: nearest, bilinear, or smooth (Catmull-Rom 2x, then bilinear). */
+enum { PLAT_FILTER_NEAREST = 0, PLAT_FILTER_LINEAR = 1, PLAT_FILTER_SMOOTH = 2 };
+void plat_set_filter(int filter);
+/* Whether the renderer is vsynced (presents block to the display refresh). */
+int  plat_vsync(void);
+/* Two-layer present for the game: `scene` (w*h XRGB8888, filtered per plat_set_filter; NULL = unchanged
+ * since the last call) with `ovl` (w*h ARGB8888, alpha 0 = transparent, always nearest) on top, both
+ * letterboxed identically. Cheap enough to call at the display rate. */
+void plat_present_layers(const uint32_t *scene, const uint32_t *ovl, int w, int h);
+
 /* Process window events; returns nonzero when the user asked to quit (close, Q). */
 int  plat_quit_requested(void);
 /* Nonzero once per Esc press seen by plat_quit_requested() (the game's skip key). */

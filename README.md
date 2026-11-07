@@ -48,7 +48,14 @@ F11 or Alt+Enter toggles borderless fullscreen (`--fullscreen` starts in it). A 
 first one used; any stick motion or button takes over from the mouse until it moves): left stick aims
 (absolute, like the original joystick), A or right trigger fires, B/X/left trigger = ACT, Start = Esc, Back = F2;
 in the launcher the stick moves the cursor and A clicks, D-pad up/down selects.
-Q quits. Options: `--difficulty 0|1|2`, `--pilot NAME`, `--scale N`; `--help` lists everything.
+Q quits. Options: `--difficulty 0|1|2`, `--pilot NAME`, `--scale N`, `--filter nearest|linear|smooth`; `--help` lists everything.
+
+The picture is two layers: the scene (video, enemies, explosions, tracers) and the HUD/crosshair overlay,
+which is always drawn crisp on top and redrawn at the display rate, so the crosshair follows the mouse
+smoothly even though the 320x200 video runs at 15 fps. `--filter` picks how the scene is scaled:
+`nearest` (hard pixels), `linear` (bilinear), or `smooth` (the default: a Catmull-Rom 2x upscale, then
+bilinear to the window size). Started from the launcher, GRAPHIC QUALITY I / II / III selects nearest /
+linear / smooth unless `--filter` is given. The browser build has the same choice on the setup panel.
 
 Headless build without SDL (for testing): `cmake -S engine -B build/headless -DDT_HEADLESS=ON`, then e.g.
 `build/headless/deadlytide --data DIR --level LEVEL01 --headless --no-pace --bot` (prints the path taken

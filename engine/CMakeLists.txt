@@ -38,7 +38,7 @@ if(NOT DT_PLATFORM_SRC)
 endif()
 
 # Portable core: container reader + codec. No SDL, no threads.
-add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c src/peres.c src/menu.c)
+add_library(dtcore STATIC src/l96.c src/cinepak.c src/scene.c src/sprites.c src/chain.c src/game.c src/bot.c src/freelook.c src/save.c src/peres.c src/menu.c src/upscale.c)
 target_include_directories(dtcore PUBLIC src)
 if(NOT MSVC)
   target_link_libraries(dtcore PUBLIC m)
@@ -97,7 +97,7 @@ if(EMSCRIPTEN)
   set_target_properties(deadlytide PROPERTIES SUFFIX ".js")
   target_link_options(deadlytide PRIVATE
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=2GB
-    "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_dt_launcher,_dt_frames,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_main,_dt_start,_dt_segment_count,_dt_launcher,_dt_frames,_dt_presents,_dt_set_filter,_malloc,_free"
     "-sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8"
     -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=65536 -sSTACK_SIZE=1MB -O2)
   add_custom_command(TARGET deadlytide POST_BUILD

@@ -17,7 +17,7 @@ int sprites_load(SpriteCtx *c, const L96File *f)
     memset(c, 0, sizeof *c);
     memcpy(c->palette, f->palette, sizeof c->palette);
     for (int i = 0; i < 256; i++)
-        c->pal32[i] = (uint32_t)c->palette[i][0] << 16 | (uint32_t)c->palette[i][1] << 8 | c->palette[i][2];
+        c->pal32[i] = 0xFF000000u | (uint32_t)c->palette[i][0] << 16 | (uint32_t)c->palette[i][1] << 8 | c->palette[i][2];
     uint8_t h[0x94];
     if (read_at(f, 0, h, sizeof h) != 0) return -1;
     uint32_t off_lut555 = rd32(h + 0x44), off_shade = rd32(h + 0x80), off_shade2 = rd32(h + 0x84);
@@ -85,7 +85,7 @@ static uint32_t rgb555_to_xrgb(uint16_t v)
 {
     uint32_t r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
     r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
-    return r << 16 | g << 8 | b;
+    return 0xFF000000u | r << 16 | g << 8 | b;   /* alpha 255: drawn (overlay layers key on it) */
 }
 
 static uint8_t xrgb_to_index(const SpriteCtx *c, uint32_t v)

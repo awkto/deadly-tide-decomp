@@ -37,14 +37,25 @@ static CombatOpts g_cx = { 0, 0, 0, 0, 0, 0, 1, 0, 0 };
 /* Launcher settings (native menu): UseJoystick (-1 = no menu: a joystick, if present, is used) and
  * FlipControl. */
 static int g_use_joy = -1, g_flip;
+static int g_live_aim;        /* the human aim (input_mouse) drives the game: the crosshair may follow it live */
+static int g_filter_cli = -1; /* --filter / dt_set_filter: -1 = from the pilot's GRAPHIC QUALITY, else PLAT_FILTER_* */
 
 static int difficulty_index(int reg) { return reg == 1 ? 0 : reg == 2 ? 2 : 1; }
 
 /* Windowed input: absolute mouse mapped onto the 320x200 frame; left = fire, right = alt,
  * middle = ACT; Space = ACT request. A joystick, if present, overrides the mouse position. */
+static void aim_read(InputState *io);
 static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState *io)
 {
     (void)ud; (void)g; (void)objs;
+    aim_read(io);
+    if (plat_act_requested()) io->act = 1;
+}
+
+/* The aim as the devices report it right now (mouse, joystick or gamepad). Shared by the 15 Hz
+ * input poll (input_mouse) and the display-rate crosshair redraw, which only looks. */
+static void aim_read(InputState *io)
+{
     int x, y; uint32_t b;
     if (plat_mouse(&x, &y, &b)) { io->x = x; io->y = g_flip ? CHAIN_H - 1 - y : y; io->buttons = b; }
     if (plat_ctrl_held()) io->buttons |= IN_CTRL;
@@ -64,7 +75,6 @@ static void input_mouse(void *ud, const Game *g, const FgBlock *objs, InputState
         if (g_flip) io->y = CHAIN_H - 1 - io->y;
         io->buttons = (io->buttons & IN_CTRL) | b;
     }
-    if (plat_act_requested()) io->act = 1;
 }
 
 /* DirectSound volume (hundredths of a dB) and pan -> linear 0..256 gain and -256..256 balance. */
@@ -84,10 +94,11 @@ static Game *combat_new(int windowed)
     go.difficulty = difficulty_index(g_cx.difficulty);
     go.god = g_cx.god;
     go.verbose = g_cx.verbose;
+    g_live_aim = 0;
     if (g_cx.idle) go.input = input_idle;
     else if (g_cx.spray) go.input = input_spray;
     else if (g_cx.bot || !windowed) go.input = input_bot;    /* headless default: the bot */
-    else go.input = input_mouse;
+    else { go.input = input_mouse; g_live_aim = 1; }
     if (windowed) go.sfx = sfx_out;
     Game *g = game_new(&go);
     if (!g) fprintf(stderr, "out of memory\n");
@@ -188,6 +199,8 @@ typedef struct {
     int pace, rc, drain_ticks, ended;
     int paused, help;          /* Pause/F3/focus loss; F1 help page over the paused frame */
     unsigned pause_tick;
+    int have_scene;            /* a scene layer has been shown (display-rate redraws may start) */
+    uint64_t last_present_ms, start_ms;
 } Player;
 
 /* ---- Pause / help overlays, F4 mute, F12 screenshot (WM_KEYDOWN F1/F3/F4/F12 + WM_ACTIVATEAPP) ---- */
@@ -221,22 +234,50 @@ static void overlay_line(uint32_t *fb, int y, const char *s, uint32_t c, int sca
 
 static void draw_pause(const Player *p)
 {
-    static uint32_t fb[CHAIN_W * CHAIN_H];
+    static uint32_t fb[CHAIN_W * CHAIN_H], ov[CHAIN_W * CHAIN_H];
     const uint32_t *src = chain_frame(p->c);
     for (int i = 0; i < CHAIN_W * CHAIN_H; i++) fb[i] = (src[i] >> 1) & 0x7F7F7Fu;
+    memset(ov, 0, sizeof ov);      /* the text is the UI layer; the dimmed picture is the scene */
     if (!p->help) {
-        overlay_line(fb, 84, "PAUSED", 0xFFFFFFFFu, 4);
-        overlay_line(fb, 124, "F1 HELP    ANY KEY RESUMES", 0xFFC0C0C0u, 1);
+        overlay_line(ov, 84, "PAUSED", 0xFFFFFFFFu, 4);
+        overlay_line(ov, 124, "F1 HELP    ANY KEY RESUMES", 0xFFC0C0C0u, 1);
     } else {
         static const char *const L[] = {
             "MOUSE / STICK  AIM", "LEFT CLICK / A  FIRE", "SPACE / B / X  ACT WEAPON",
             "ESC / START  SKIP", "F2 / BACK  HUB", "F5  RESTART LEVEL", "PAUSE / F3  PAUSE",
             "F4  MUTE", "F11 / ALT+ENTER  FULLSCREEN", "F12  SCREENSHOT", "Q  QUIT" };
-        overlay_line(fb, 12, "CONTROLS", 0xFFFFFFFFu, 2);
-        for (int i = 0; i < (int)(sizeof L / sizeof *L); i++) overlay_line(fb, 38 + i * 12, L[i], 0xFFE0E0E0u, 1);
-        overlay_line(fb, 184, "ANY KEY RESUMES", 0xFFC0C0C0u, 1);
+        overlay_line(ov, 12, "CONTROLS", 0xFFFFFFFFu, 2);
+        for (int i = 0; i < (int)(sizeof L / sizeof *L); i++) overlay_line(ov, 38 + i * 12, L[i], 0xFFE0E0E0u, 1);
+        overlay_line(ov, 184, "ANY KEY RESUMES", 0xFFC0C0C0u, 1);
     }
-    plat_present(fb, CHAIN_W, CHAIN_H);
+    plat_present_layers(fb, ov, CHAIN_W, CHAIN_H);
+}
+
+/* Present the game: the scene layer when a new picture arrived (`fresh`), the UI layer every call with
+ * the crosshair at the CURRENT aim. Purely cosmetic: the game's own aim, hit tests and RNG stay on the
+ * 15 Hz tick. */
+static unsigned g_presents;   /* plat_present_layers calls (dt_presents() on the web) */
+static void present_game(Player *p, int fresh)
+{
+    static uint32_t ov[CHAIN_W * CHAIN_H];
+    memcpy(ov, chain_overlay(p->c), sizeof ov);
+    if (p->game) {
+        GameState gs;
+        game_fill_state(p->game, &gs);
+        int x = gs.xhair_x, y = gs.xhair_y;
+        if (g_live_aim) {
+            InputState in;
+            memset(&in, 0, sizeof in);
+            in.x = x; in.y = y;
+            aim_read(&in);
+            x = in.x; y = in.y;
+        }
+        game_draw_crosshair_at(p->game, ov, x, y);
+    }
+    plat_present_layers(fresh ? chain_scene(p->c) : NULL, ov, CHAIN_W, CHAIN_H);
+    p->have_scene = 1;
+    p->last_present_ms = plat_time_ms();
+    g_presents++;
 }
 
 static void set_paused(Player *p, int on)
@@ -245,7 +286,7 @@ static void set_paused(Player *p, int on)
     plat_audio_pause(on);
     if (on) { draw_pause(p); fprintf(stderr, "paused\n"); }
     else {
-        plat_present(chain_frame(p->c), CHAIN_W, CHAIN_H);
+        if (p->have_scene) present_game(p, 1);
         fprintf(stderr, "resumed\n");
     }
 }
@@ -264,8 +305,10 @@ static int play_init(Player *p, const ChainOpts *co, int scale, long max_frames,
         chain_close(p->c); p->c = NULL; game_free(p->game); p->game = NULL; return 1;
     }
     plat_show_cursor(0);   /* the game draws its own crosshair; the original hides the OS cursor */
+    if (g_filter_cli >= 0) plat_set_filter(g_filter_cli);
     plat_text_input(0);
     plat_skip_requested(); plat_act_requested(); plat_any_input(); plat_take_keys();
+    p->start_ms = plat_time_ms();
     p->sink.pace = pace;
     p->sink.frame_no = &p->frame_no;
     p->pace = pace;
@@ -346,7 +389,9 @@ static int play_tick(Player *p)
         if (!p->pace) break;
         if (chain_fill(c, AHEAD, sink_audio, &p->sink) != 0) { p->rc = 1; break; }
     }
-    if (shown) { plat_present(chain_frame(c), CHAIN_W, CHAIN_H); g_presented++; }
+    if (shown) { present_game(p, 1); g_presented++; }
+    else if (p->have_scene && plat_time_ms() - p->last_present_ms >= (plat_vsync() ? 2u : 15u))
+        present_game(p, 0);       /* display rate: only the UI layer (crosshair) moves */
     return p->rc != 0;
 }
 
@@ -359,6 +404,11 @@ static int play_finish(Player *p)
         fprintf(stderr, "av-check: %ld frames, %ld audio flushes (jumps), audio position minus frame time: "
                 "min %.1f ms, max %.1f ms (frame = 66.7 ms), worst within 2 s of a jump %.1f ms\n",
                 g_av.frames, g_av.flushes, g_av.min, g_av.max, g_av.jmax);
+    if (p->have_scene) {
+        double secs = (double)(plat_time_ms() - p->start_ms) / 1000.0;
+        fprintf(stderr, "present: %u display presents, %u video frames in %.1f s (%.1f presents/s, %.1f video fps)\n",
+                g_presents, g_presented, secs, (double)g_presents / secs, (double)g_presented / secs);
+    }
     if (p->game) game_print_stats(p->game, stderr);
     chain_close(p->c);
     game_free(p->game);
@@ -436,8 +486,9 @@ static void menu_apply(const MenuResult *r, const char *path, SaveData *sv, Chai
     g_flip = sv->flip;
     plat_set_volume(sv->volume);
     g_muted = 0;
-    /* Quality I/II/III (GraphicQuality) picks a DirectDraw video mode in the original; here the window is
-     * freely resizable with nearest scaling, so it has no effect. */
+    /* Quality I/II/III (GraphicQuality) picks a DirectDraw video mode in the original; here it picks the
+     * scene filter instead: nearest / linear / smooth (--filter overrides). */
+    if (g_filter_cli < 0) plat_set_filter(sv->quality);
     int demo = is_demo_pilot(sv->pilot);
     if (demo) { g_cx.demo = 1; g_cx.god = 1; g_cx.bot = 1; }
     co->level = (demo || sv->highest_level == 0) ? "LOGOS" : "LEVEL00";   /* as Game_Main */
@@ -701,6 +752,8 @@ static void usage(void)
         "  --demo             attract mode: start at LOGOS, bot + god, loop LEVEL01 back to LOGOS\n"
         "                     (windowed: any key or click quits; headless: see --demo-loops)\n"
         "  --demo-loops N     headless demo: stop after N passes back to LOGOS (default 1)\n"
+        "  --filter F         scene filter: nearest | linear | smooth (default smooth; the launcher's\n"
+        "                     GRAPHIC QUALITY I/II/III picks nearest/linear/smooth unless this is given)\n"
         "  --fullscreen       start in borderless fullscreen (F11 / Alt+Enter toggle)\n"
         "combat:\n"
         "  --bot              aimbot input (default when headless)\n"
@@ -736,6 +789,12 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--level") && more) level = argv[++i];
         else if ((!strcmp(a, "--segment") || !strcmp(a, "--from-seg")) && more) seg = atoi(argv[++i]);
         else if (!strcmp(a, "--fullscreen")) fullscreen = 1;
+        else if (!strcmp(a, "--filter") && more) {
+            const char *f = argv[++i];
+            g_filter_cli = !strcmp(f, "nearest") ? PLAT_FILTER_NEAREST : !strcmp(f, "linear") ? PLAT_FILTER_LINEAR
+                         : !strcmp(f, "smooth") ? PLAT_FILTER_SMOOTH : -2;
+            if (g_filter_cli == -2) { usage(); return 2; }
+        }
         else if (!strcmp(a, "--scale") && more) scale = atoi(argv[++i]);
         else if (!strcmp(a, "--count") && more) count = atol(argv[++i]);
         else if (!strcmp(a, "--dump-frames") && more) dump = argv[++i];

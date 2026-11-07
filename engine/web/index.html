@@ -33,6 +33,12 @@
    <option value="0">Easy</option>
    <option value="1" selected>Normal</option>
    <option value="2">Hard</option>
+ </select></label>
+ <label>Filter: <select id="filter">
+   <option value="-1" selected>Launcher quality (default: smooth)</option>
+   <option value="2">Smooth (Catmull-Rom 2x)</option>
+   <option value="1">Linear</option>
+   <option value="0">Nearest (pixels)</option>
  </select></label><br><br>
  <label>File: <select id="file"></select></label>
  <label>Segment: <select id="seg"></select></label>
@@ -218,6 +224,7 @@ $('play').onclick = () => {   // user gesture: lets the browser start audio
   if (err) return;
   savePrefs();
   const fail = (what, rc) => { setPlaying(false); log(what + ' failed: ' + rc); };
+  Module.ccall('dt_set_filter', null, ['number'], [+$('filter').value]);
   if (mode === 3) {
     setPlaying(true, 'Launcher');
     Module.ccall('dt_launcher', 'number', [], [], { async: true }).then(rc => { if (rc < 0) fail('dt_launcher', rc); });

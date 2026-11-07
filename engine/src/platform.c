@@ -1,5 +1,6 @@
 /* platform.c - SDL3 backend for platform.h. */
 #include "platform.h"
+#include "upscale.h"
 
 #include <SDL3/SDL.h>
 #ifdef __EMSCRIPTEN__
@@ -11,6 +12,12 @@ static SDL_Window      *g_win;
 static SDL_Renderer    *g_ren;
 static SDL_Texture     *g_tex;
 static int              g_tex_w, g_tex_h;
+static int              g_lw, g_lh;         /* logical presentation size currently set */
+static int              g_filter = PLAT_FILTER_SMOOTH, g_vsync;
+static SDL_Texture     *g_stex, *g_otex;    /* scene layer / overlay layer */
+static int              g_stex_w, g_stex_h, g_stex_filter = -1, g_otex_w, g_otex_h;
+static const uint32_t  *g_last_scene;
+static uint32_t        *g_up, *g_up_tmp;    /* smooth upscale output / scratch */
 static SDL_AudioStream *g_audio;
 static SDL_AudioDeviceID g_audio_dev;
 static int              g_skip, g_act, g_any_input;
@@ -117,6 +124,10 @@ int plat_init(int w, int h, int scale, int audio_rate, const char *title)
     }
     /* Integer-scaled nearest-neighbour presentation of the logical frame. */
     SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    g_lw = w; g_lh = h;
+#ifndef __EMSCRIPTEN__
+    g_vsync = SDL_SetRenderVSync(g_ren, 1) ? 1 : 0;   /* the web loop paces itself (emscripten_sleep) */
+#endif
     if (g_fullscreen) SDL_SetWindowFullscreen(g_win, true);
     SDL_HideCursor();   /* the game draws its own crosshair; the original hides the OS cursor */
 
@@ -168,10 +179,31 @@ void plat_shutdown(void)
     if (g_audio_dev) SDL_CloseAudioDevice(g_audio_dev);
     g_audio_dev = 0;
     if (g_tex) SDL_DestroyTexture(g_tex);
+    if (g_stex) SDL_DestroyTexture(g_stex);
+    if (g_otex) SDL_DestroyTexture(g_otex);
+    g_stex = g_otex = NULL; g_stex_filter = -1; g_stex_w = g_stex_h = g_otex_w = g_otex_h = g_lw = g_lh = 0;
+    SDL_free(g_up); SDL_free(g_up_tmp);
+    g_up = g_up_tmp = NULL;
     if (g_ren) SDL_DestroyRenderer(g_ren);
     if (g_win) SDL_DestroyWindow(g_win);
     g_audio = NULL; g_tex = NULL; g_ren = NULL; g_win = NULL;
     SDL_Quit();
+}
+
+/* Letterbox the logical size w x h (and tell the web page its aspect). */
+static void set_logical(int w, int h)
+{
+    if (w == g_lw && h == g_lh) return;
+    g_lw = w; g_lh = h;
+    g_frame_w = w; g_frame_h = h;
+    SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+#ifdef __EMSCRIPTEN__
+    {   /* tell the page the picture size (4:3 launcher vs 8:5 game) so it can fit the canvas */
+        char js[96];
+        snprintf(js, sizeof js, "if (Module.onFrameSize) Module.onFrameSize(%d,%d)", w, h);
+        emscripten_run_script(js);
+    }
+#endif
 }
 
 void plat_present(const uint32_t *xrgb, int w, int h)
@@ -182,19 +214,57 @@ void plat_present(const uint32_t *xrgb, int w, int h)
         if (!g_tex) { fprintf(stderr, "texture: %s\n", SDL_GetError()); return; }
         SDL_SetTextureScaleMode(g_tex, SDL_SCALEMODE_NEAREST);
         g_tex_w = w; g_tex_h = h;
-        g_frame_w = w; g_frame_h = h;
-        SDL_SetRenderLogicalPresentation(g_ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-#ifdef __EMSCRIPTEN__
-        {   /* tell the page the picture size (4:3 launcher vs 8:5 game) so it can fit the canvas */
-            char js[96];
-            snprintf(js, sizeof js, "if (Module.onFrameSize) Module.onFrameSize(%d,%d)", w, h);
-            emscripten_run_script(js);
-        }
-#endif
     }
+    set_logical(w, h);
     SDL_UpdateTexture(g_tex, NULL, xrgb, w * (int)sizeof(uint32_t));
     SDL_RenderClear(g_ren);
     SDL_RenderTexture(g_ren, g_tex, NULL, NULL);
+    SDL_RenderPresent(g_ren);
+}
+
+void plat_set_filter(int filter) { g_filter = filter < 0 ? 0 : filter > PLAT_FILTER_SMOOTH ? PLAT_FILTER_SMOOTH : filter; }
+int  plat_vsync(void) { return g_vsync; }
+
+void plat_present_layers(const uint32_t *scene, const uint32_t *ovl, int w, int h)
+{
+    int sw = g_filter == PLAT_FILTER_SMOOTH ? w * 2 : w, sh = g_filter == PLAT_FILTER_SMOOTH ? h * 2 : h;
+    if (!g_stex || sw != g_stex_w || sh != g_stex_h || g_filter != g_stex_filter) {
+        if (g_stex) SDL_DestroyTexture(g_stex);
+        g_stex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, sw, sh);
+        if (!g_stex) { fprintf(stderr, "texture: %s\n", SDL_GetError()); return; }
+        SDL_SetTextureScaleMode(g_stex, g_filter == PLAT_FILTER_NEAREST ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
+        g_stex_w = sw; g_stex_h = sh; g_stex_filter = g_filter;
+        SDL_free(g_up); SDL_free(g_up_tmp);
+        g_up = g_up_tmp = NULL;
+        if (g_filter == PLAT_FILTER_SMOOTH) {
+            g_up = SDL_malloc((size_t)sw * (size_t)sh * sizeof(uint32_t));
+            g_up_tmp = SDL_malloc((size_t)sw * (size_t)h * sizeof(uint32_t));
+            if (!g_up || !g_up_tmp) { fprintf(stderr, "upscale: out of memory\n"); return; }
+        }
+        if (!scene) scene = g_last_scene;     /* new texture: it needs the picture again */
+    }
+    if (scene) g_last_scene = scene;
+    if (!g_otex || g_otex_w != w || g_otex_h != h) {
+        if (g_otex) SDL_DestroyTexture(g_otex);
+        g_otex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+        if (!g_otex) { fprintf(stderr, "texture: %s\n", SDL_GetError()); return; }
+        SDL_SetTextureScaleMode(g_otex, SDL_SCALEMODE_NEAREST);
+        SDL_SetTextureBlendMode(g_otex, SDL_BLENDMODE_BLEND);
+        g_otex_w = w; g_otex_h = h;
+    }
+    set_logical(w, h);
+    if (scene) {
+        if (g_filter == PLAT_FILTER_SMOOTH && g_up && g_up_tmp) {
+            upscale2x_catmull(scene, w, h, g_up, g_up_tmp);
+            SDL_UpdateTexture(g_stex, NULL, g_up, sw * (int)sizeof(uint32_t));
+        } else {
+            SDL_UpdateTexture(g_stex, NULL, scene, w * (int)sizeof(uint32_t));
+        }
+    }
+    SDL_UpdateTexture(g_otex, NULL, ovl, w * (int)sizeof(uint32_t));
+    SDL_RenderClear(g_ren);
+    SDL_RenderTexture(g_ren, g_stex, NULL, NULL);
+    SDL_RenderTexture(g_ren, g_otex, NULL, NULL);
     SDL_RenderPresent(g_ren);
 }
 

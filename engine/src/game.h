@@ -74,8 +74,17 @@ int  game_level_load(Game *g, const L96File *f, const SpriteCtx *spr);
 void game_segment_start(Game *g, int seg, const uint8_t *rec);
 
 void game_frame_pre(Game *g, FgBlock *objs, const uint8_t *hdr);
-/* `frame` = the composited 320x200 XRGB image (NULL / drawn=0 on frames without a picture). */
-void game_frame_post(Game *g, FgBlock *objs, const uint8_t *hdr, uint32_t *frame, int drawn);
+/* `frame` = the composited 320x200 XRGB image (NULL / drawn=0 on frames without a picture).
+ * It still receives the full composite (headless dumps). In addition, with `lay`: scene = the
+ * picture without HUD (in-world sprites, streaks, flash and ACT included; flash tint and shake
+ * applied) and ovl = the UI (target brackets, gauges, messages; alpha 255 where drawn, 0 elsewhere).
+ * The crosshair is in neither: redraw it with game_draw_crosshair_at(). Returns 1 when both layers
+ * were filled (the tick had a picture), else 0 and they are untouched. */
+typedef struct { uint32_t *scene, *ovl; } GameLayers;
+int game_frame_post(Game *g, FgBlock *objs, const uint8_t *hdr, uint32_t *frame, int drawn, const GameLayers *lay);
+/* Draw the crosshair frame of the last tick centred on top-down (x, y) into an alpha overlay
+ * (cosmetic: lets the presenter move it at display rate). No-op when no crosshair was shown. */
+void game_draw_crosshair_at(const Game *g, uint32_t *ovl, int x, int y);
 
 /* Type-6 Player_Update (0x410740 case 6) pieces; the chain runs the camera and the pick between
  * them. poll: Input_Poll (crosshair + buttons). fire: Weapon_Fire, when no pick is pending. */

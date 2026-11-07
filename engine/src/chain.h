@@ -60,7 +60,12 @@ int chain_fill(Chain *c, int ahead, ChainAudioFn fn, void *ud);
  * only when nothing is buffered. */
 int chain_step(Chain *c, int *new_image, ChainAudioFn fn, void *ud);
 
-const uint32_t *chain_frame(const Chain *c);   /* CHAIN_W x CHAIN_H XRGB8888 */
+const uint32_t *chain_frame(const Chain *c);   /* CHAIN_W x CHAIN_H XRGB8888, the full composite */
+/* The same picture as two layers (valid once a tick had a picture): the scene (video + in-world
+ * sprites, free-look output) and the UI overlay (alpha 255 where drawn; no crosshair, see
+ * game_draw_crosshair_at). Compositing overlay over scene gives chain_frame minus the crosshair. */
+const uint32_t *chain_scene(const Chain *c);
+const uint32_t *chain_overlay(const Chain *c);
 
 /* ESC (Key_Skip). Returns 0 ignored, 1 jumped (buffered groups dropped: the caller
  * should drop queued audio too), 2 quit requested. */

@@ -108,6 +108,12 @@ struct Game {
     double    pred_cam[3], pred_lk[3], pred_roll;
     int       fl_yaw, fl_pitch, fl_have;     /* free-look view at the previous Enemy_Update */
     float     fl_sx, fl_sy;                  /* screen shift of a static point from the view change */
+    /* Presentation layers (game_frame_post): scene = frame without the HUD; ovl = brackets + gauges
+     * (alpha 255 where drawn); xb / bb = the crosshair and the gauges while the frame is composed. */
+    uint32_t *lay_scene, *lay_ovl;
+    int       lay_split;
+    FgRecord  xh_rec;  int xh_valid;         /* crosshair frame drawn this tick (live redraw at display rate) */
+    uint32_t  xb[W * H], bb[W * H];
 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -1185,7 +1191,33 @@ static void draw_crosshair(Game *g, uint32_t *dst, int on_target, int style)
     if (!s || s->count < 2) return;
     if (++g->xh_counter >= s->count / 2) g->xh_counter = 0;
     const FgRecord *fr = &s->fr[g->xh_counter + (on_target ? s->count / 2 : 0)];
+    g->xh_rec = *fr; g->xh_valid = 1;
     draw_frame(g, fr, g->xhair_x - fr->w / 2, H - g->xhair_y - fr->h / 2, dst, 0);
+}
+
+void game_draw_crosshair_at(const Game *g, uint32_t *ovl, int x, int y)
+{
+    if (!g->xh_valid) return;
+    x = x < 0 ? 0 : x >= W ? W - 1 : x;
+    y = y < 0 ? 0 : y >= H ? H - 1 : y;
+    draw_frame(g, &g->xh_rec, x - g->xh_rec.w / 2, H - y - g->xh_rec.h / 2, ovl, 0);
+}
+
+/* The scene is complete in `dst`: keep a copy as the scene layer and start the (transparent) UI layers. */
+static void split_layers(Game *g, const uint32_t *dst)
+{
+    if (g->lay_split) return;
+    g->lay_split = 1;
+    if (g->lay_scene) memcpy(g->lay_scene, dst, sizeof(uint32_t) * W * H);
+    if (g->lay_ovl) memset(g->lay_ovl, 0, sizeof(uint32_t) * W * H);
+    memset(g->xb, 0, sizeof g->xb);
+    memset(g->bb, 0, sizeof g->bb);
+}
+
+/* dst = src where src is drawn (alpha set). */
+static void over(uint32_t *dst, const uint32_t *src)
+{
+    for (int i = 0; i < W * H; i++) if (src[i] >> 24) dst[i] = src[i];
 }
 
 /* Hud_DrawGauges0 0x40a610 (+ message blink). */
@@ -1243,14 +1275,16 @@ static void hud_draw(Game *g, FgBlock *b, int fire_allowed, uint32_t *dst)
         draw_streaks(g, dst);
         for (int i = 0; b && i < b->count; i++)     /* Obj_DrawStatic: kind 8 */
             if (b->rec[i].kind == OBJ_OVERLAY) sprite_draw(g->spr, &b->rec[i], dst, W, H);
+        split_layers(g, dst);    /* everything from here on is UI */
     }
+    uint32_t *ov = dst ? g->lay_ovl : NULL;
     int choice = rd16(g->rec + 0x5c);
     if (b && (choice == 0 || g->scene_frame < choice)) {
         for (int i = 0; i < b->count; i++) {
             const FgRecord *r = &b->rec[i];
             if (rec_skipped(g, r) || !targetable(g, r, 0) || !bbox_nonzero(r)) continue;
             const uint8_t *c = cls_of(g, r->actor);
-            if (dst && (c[1] & 0x40)) draw_bracket(g, dst, r, c);
+            if (dst && (c[1] & 0x40)) draw_bracket(g, ov, r, c);
             if (r->bbox[0] <= g->xhair_x && g->xhair_x <= r->bbox[2] && r->bbox[1] <= g->xhair_y && g->xhair_y <= r->bbox[3])
                 on_target = 1;
         }
@@ -1275,37 +1309,47 @@ static void hud_draw(Game *g, FgBlock *b, int fire_allowed, uint32_t *dst)
         else if (g->msg_id == 5) hud_message(g, 0, 0, 0, 0);
     }
     if (!dst) return;
-    if (style && fire_allowed) draw_crosshair(g, dst, on_target, style);
-    if (g->rec[0x44]) { if (g->rec[0x58] == 1) draw_gauges1(g, dst); else draw_gauges0(g, dst); }
+    if (style && fire_allowed) draw_crosshair(g, g->xb, on_target, style);
+    if (g->rec[0x44]) { if (g->rec[0x58] == 1) draw_gauges1(g, g->bb); else draw_gauges0(g, g->bb); }
+    /* The composite keeps the original draw order: brackets, crosshair, gauges. */
+    over(dst, ov); over(dst, g->xb); over(dst, g->bb);
+    over(ov, g->bb);
 }
 
 /* DD_Present: flash tint and shake. The tint colours are unknown (§7.4); a warm white blend. */
-static void present_fx(Game *g, uint32_t *dst)
+static void fx_tint(uint32_t *dst, int level)
+{
+    unsigned a = (unsigned)(level > 3 ? 3 : level) * 40;   /* /256 */
+    for (int i = 0; i < W * H; i++) {
+        uint32_t v = dst[i];
+        unsigned r = (v >> 16) & 255, gg = (v >> 8) & 255, bb = v & 255;
+        r += ((255 - r) * a) >> 8; gg += ((224 - (gg > 224 ? 224 : gg)) * a) >> 8; bb += ((176 - (bb > 176 ? 176 : bb)) * a) >> 8;
+        dst[i] = (v & 0xFF000000u) | r << 16 | gg << 8 | bb;
+    }
+}
+
+static void fx_shift(uint32_t *dst, int dx, int dy)
+{
+    static uint32_t tmp[W * H];
+    memcpy(tmp, dst, sizeof tmp);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            int sx = x - dx, sy = y - dy;
+            dst[y * W + x] = sx >= 0 && sx < W && sy >= 0 && sy < H ? tmp[sy * W + sx] : 0;
+        }
+}
+
+/* Applied to the composite (dumps) and to the scene layer; the UI layer stays steady. */
+static void present_fx(Game *g, uint32_t *dst, uint32_t *scene)
 {
     int level = g->flash;
     if (g->flash > 0) g->flash--;
-    if (level > 0) {
-        unsigned a = (unsigned)(level > 3 ? 3 : level) * 40;   /* /256 */
-        for (int i = 0; i < W * H; i++) {
-            uint32_t v = dst[i];
-            unsigned r = (v >> 16) & 255, gg = (v >> 8) & 255, bb = v & 255;
-            r += ((255 - r) * a) >> 8; gg += ((224 - (gg > 224 ? 224 : gg)) * a) >> 8; bb += ((176 - (bb > 176 ? 176 : bb)) * a) >> 8;
-            dst[i] = r << 16 | gg << 8 | bb;
-        }
-    }
+    if (level > 0) { fx_tint(dst, level); if (scene) fx_tint(scene, level); }
     if (g->shake) {
         int s = g->shake;
         int dx = (rnd() * s / 0x7fff - s / 2) & ~3, dy = rnd() * s / 0x7fff - s / 2;
         g->shake--;
-        if (dx || dy) {
-            static uint32_t tmp[W * H];
-            memcpy(tmp, dst, sizeof tmp);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++) {
-                    int sx = x - dx, sy = y - dy;
-                    dst[y * W + x] = sx >= 0 && sx < W && sy >= 0 && sy < H ? tmp[sy * W + sx] : 0;
-                }
-        }
+        if (dx || dy) { fx_shift(dst, dx, dy); if (scene) fx_shift(scene, dx, dy); }
     }
 }
 
@@ -1317,11 +1361,14 @@ static void sfx_player_death(Game *g)
     sfx(g, g->rec[0x14], 0, 0);
 }
 
-void game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, int drawn)
+int game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, int drawn, const GameLayers *lay)
 {
-    if (!g->loaded || !g->have_seg) return;
+    if (!g->loaded || !g->have_seg) return 0;
+    g->lay_scene = lay ? lay->scene : NULL; g->lay_ovl = lay ? lay->ovl : NULL;
+    g->lay_split = 0;
     uint32_t flags = hdr ? rd32(hdr + 0x20) : 0;
     uint32_t *dst = drawn ? frame : NULL;
+    if (dst) g->xh_valid = 0;
     switch (g->type) {
     case SEG_RAIL:
         if (flags & 1) { enemy_update(g, b); hud_draw(g, b, (flags & 2) != 0, dst); }
@@ -1339,7 +1386,12 @@ void game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, i
         if (g->health > 10000) g->health = 10000;
         break;
     }
-    if (dst) present_fx(g, dst);
+    int layered = 0;
+    if (dst && lay) {
+        split_layers(g, dst);   /* no HUD this tick: all scene, empty UI */
+        layered = 1;
+    }
+    if (dst) present_fx(g, dst, layered ? g->lay_scene : NULL);
     /* Player_Update 0x410740. */
     if (g->type == SEG_RAIL && (flags & 1) && g->rec[0x44]) {
         input_poll(g, b);
@@ -1354,6 +1406,7 @@ void game_frame_post(Game *g, FgBlock *b, const uint8_t *hdr, uint32_t *frame, i
         g->dead = 1; g->death_latch = 0; g->latched_prev = 0;
     }
     g->frame_no++; g->scene_frame++;
+    return layered;
 }
 
 /* ---- type 6 / save points ------------------------------------------------------------------ */

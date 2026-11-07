@@ -53,6 +53,18 @@ static int web_l96_open(const char *path, L96Reader *out)
 EMSCRIPTEN_KEEPALIVE
 unsigned dt_frames(void) { return g_presented; }
 
+/* Display-rate presents (scene + UI layer redraws), for measuring. */
+EMSCRIPTEN_KEEPALIVE
+unsigned dt_presents(void) { return g_presents; }
+
+/* Scene filter: 0 nearest, 1 linear, 2 smooth; -1 = follow the launcher's GRAPHIC QUALITY. */
+EMSCRIPTEN_KEEPALIVE
+void dt_set_filter(int f)
+{
+    g_filter_cli = f < -1 ? -1 : f > 2 ? 2 : f;
+    if (g_filter_cli >= 0) plat_set_filter(g_filter_cli);
+}
+
 EMSCRIPTEN_KEEPALIVE
 int dt_segment_count(const char *path)
 {

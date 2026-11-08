@@ -16,7 +16,8 @@ Tracking: gitlab.dnsif.ca `github/deadly-tide-decomp` issues #1–#7.
 
 ## Next
 1. Real-user play testing (mouse feel, difficulty, audio sync on real speakers: a test rig measured ~0.9 s audio lag, likely its virtual sound device).
-2. First release: tag `v0.1.0` (CI attaches Linux/Windows/macOS/web zips, no game data).
+2. ~~First release~~ — v0.1.0 released 2026-11-08; browser build live at https://awkto.github.io/deadly-tide-decomp/ (GitHub Pages, deployed on every push to main).
+4. UI polish pass (launcher/web page look), possibly with Claude Design.
 3. Optional: a hosted web page (code only; users pick their own files); 16-bit tint blend (`Px_Plot16Tinted`); START button animation details (sprite classes not decompiled).
 
 ## What the game actually is

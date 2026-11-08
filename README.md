@@ -15,7 +15,7 @@ runs natively and in the browser (WebAssembly).
 - Engine: plays the whole game — video + audio, branching scene graph, enemies, weapons with heat,
   health/death, HUD, SFX, free-look 3D scenes, the mission-select globe, save points.
   Verified headless (a bot completes the game) and with scripted mouse/keyboard input in a window and the browser.
-- Browser build: works with files you select locally; they are read lazily (never uploaded or copied into memory).
+- Browser build: play it at **https://awkto.github.io/deadly-tide-decomp/** with your own game files (pick the CD folders and DT.EXE). Files are read lazily from your disk, never uploaded or copied into memory.
 
 See [PLAN.md](PLAN.md) for details and next steps.
 

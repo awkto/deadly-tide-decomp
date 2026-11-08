@@ -114,6 +114,31 @@ jobs:
         with:
           name: deadlytide-web
           path: dist/deadlytide-web.zip
+      - name: Stage GitHub Pages site (code only, never game data)
+        run: |
+          mkdir -p site
+          cp build/wasm/index.html build/wasm/deadlytide.js build/wasm/deadlytide.wasm site/
+          touch site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: wasm
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
